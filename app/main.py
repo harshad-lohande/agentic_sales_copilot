@@ -5,15 +5,14 @@ import csv
 from dotenv import load_dotenv
 from .config import settings
 from .logging_config import logger
+import markdown2
 
 from agents import Agent, Runner, trace, function_tool
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, ReplyTo
 
-# Load environment variables
 load_dotenv()
 
-# --- Tool Definition ---
 @function_tool
 def send_personalized_bulk_email(subject: str, body_template: str):
     """
@@ -24,13 +23,8 @@ def send_personalized_bulk_email(subject: str, body_template: str):
         "subject_template": subject
     })
     try:
-        # Initialize the SendGrid client
         sg = SendGridAPIClient(settings.SENDGRID_API_KEY)
-        # IMPORTANT: Use an email address you have verified as a "Single Sender" in SendGrid
-        verified_sender = settings.SENDER_EMAIL
-
-        # Define a reply-to address on your inbound subdomain.
-        # The part before the '@' can be anything (e.g., 'replies', 'inbound', 'routing').
+        from_email_with_name = (settings.SENDER_EMAIL, settings.SENDER_NAME)
         inbound_reply_address = settings.REPLY_TO_EMAIL
 
         with open(settings.PROSPECTS_CSV_PATH, mode='r', encoding='utf-8') as infile:
@@ -38,24 +32,23 @@ def send_personalized_bulk_email(subject: str, body_template: str):
             prospects = list(reader)
 
             for prospect in prospects:
-                personalized_body = body_template
+                personalized_body_md = body_template
                 personalized_subject = subject
 
                 for key, value in prospect.items():
                     placeholder_to_find = "{{" + key + "}}"
                     value_to_use = value if value is not None else ""
                     personalized_subject = personalized_subject.replace(placeholder_to_find, value_to_use)
-                    personalized_body = personalized_body.replace(placeholder_to_find, value_to_use)
+                    personalized_body_md = personalized_body_md.replace(placeholder_to_find, value_to_use)
 
-                # Construct the SendGrid Mail object
+                personalized_body_html = markdown2.markdown(personalized_body_md)
+
                 message = Mail(
-                    from_email=verified_sender,
+                    from_email=from_email_with_name,
                     to_emails=prospect['Email'],
                     subject=personalized_subject,
-                    html_content=f"<html><body>{personalized_body.replace('\n', '<br>')}</body></html>"
+                    html_content=personalized_body_html
                 )
-
-                # Add the Reply-To header to the message.
                 message.reply_to = ReplyTo(inbound_reply_address)
                 
                 response = sg.send(message)
@@ -74,92 +67,100 @@ def send_personalized_bulk_email(subject: str, body_template: str):
         })
         return {"status": "error", "message": f"Failed to send email campaign due to an internal tool error: {e}"}
 
-# --- Agent Architecture using Handoff ---
-
 async def run_autonomous_sales_workflow():
-    """
-    This workflow uses a handoff mechanism for better autonomy and specialization.
-    """
-    
-    # 1. Define the Specialist "Sending" Agent
-    # This agent does one thing: sends the campaign. It's a perfect candidate for delegation.
     logger.info({"message": "Starting autonomous sales workflow..."})
-    sender_instructions = "You are a specialized agent responsible for executing email campaigns. You will receive the subject and body of an email, and your only job is to use the `send_personalized_bulk_email` tool to send it."
     
-    campaign_sender_agent = Agent(
-        name="Campaign_Sender_Agent",
-        instructions=sender_instructions,
-        tools=[send_personalized_bulk_email],
-        model=settings.CAMAPIGN_SENDER_MODEL,
-        # This description is what the manager agent sees when deciding to hand off
-        handoff_description="Use this agent to send the final, approved email campaign to the prospect list."
-    )
+    sender_instructions = "You are a specialized agent responsible for executing email campaigns. You will receive the subject and body of an email, and your only job is to use the `send_personalized_bulk_email` tool to send it."
+    campaign_sender_agent = Agent(name="Campaign_Sender_Agent", instructions=sender_instructions, tools=[send_personalized_bulk_email], model=settings.CAMAPIGN_SENDER_MODEL, handoff_description="Use this agent to send the final, approved email campaign to the prospect list.")
+    
+    instructions1 = f"""You are a professional, serious sales agent for SovereignAI.
+            A company that sells agentic AI based solutions to bring autonomy and automation in business processes.
+            You write cold sales emails that directly addressing prospects's pain-points.
+            This email is a template and MUST include placeholders like {{{{Position}}}}, {{{{Company}}}} and {{{{FirstName}}}} in subject and/or body for mail merge.
+            Address the email recipient using {{{{FirstName}}}} placeholder.
+            Email must be signed-off by {settings.SALES_REP_NAME}, followed by his designation (e.g. Sales Development Representative), and finally followed by company name (SovereignAI).
+            Include P.S at the end of body."""
+    instructions2 = f"""You are a humorous, witty sales agent for SovereignAI.
+            A company that sells agentic AI based solutions to bring autonomy and automation in business processes.
+            You write cold sales emails that are likely to get response from a prospect.
+            This email is a template and MUST include placeholders like {{{{Position}}}}, {{{{Company}}}} and {{{{FirstName}}}} in subject and/or body for mail merge.
+            Address the email recipient using {{{{FirstName}}}} placeholder.
+            Email must be signed-off by {settings.SALES_REP_NAME}, followed by his designation (e.g. Sales Development Representative), and finally followed by company name (SovereignAI).
+            Include P.S at the end of body."""
+    instructions3 = f"""You are a busy agent for SovereignAI.
+            A company that sells agentic AI based solutions to bring autonomy and automation in business processes.
+            You write cold sales emails that are concise and to-the-point.
+            This email is a template and MUST include placeholders like {{{{Position}}}}, {{{{Company}}}} and {{{{FirstName}}}} in subject and/or body for mail merge.
+            Address the email recipient using {{{{FirstName}}}} placeholder.
+            Email must be signed-off by {settings.SALES_REP_NAME}, followed by his designation (e.g. Sales Development Representative), and finally followed by company name (SovereignAI).
+            Include P.S at the end of body."""
 
-    # 2. Define the Content-Generating Agents (as tools)
-    instructions1 = "You are a professional, serious sales agent for SovereignAI, \
-            a company that sells agentic AI based solutions to bring autonomy and automation in business processes. \
-            You write cold sales emails that directly addressing prospects's pain-points. \
-            If you have to, use only following placeholders in your subject line and/or body:  {{Position}}, {{Company}} and {{FirstName}}."
-    instructions2 = "You are a humorous, witty sales agent for SovereignAI, \
-            a company that sells agentic AI based solutions to bring autonomy and automation in business processes. \
-            You write cold sales emails that are likely to get response from a prospect.\
-            If you have to, use only following placeholders in your subject line and/or body:  {{Position}}, {{Company}} and {{FirstName}}."
-    instructions3 = "You are a busy agent for SovereignAI, \
-            a company that sells agentic AI based solutions to bring autonomy and automation in business processes. \
-            You write cold sales emails that are concise and to-the-point.\
-            If you have to, use only following placeholders in your subject line and/or body:  {{Position}}, {{Company}} and {{FirstName}}."
-
+    
     sales_agent1 = Agent(name="Professional_Sales_Agent", instructions=instructions1, model=settings.WRITER_AGENT_MODEL)
     sales_agent2 = Agent(name="Engaging_Sales_Agent", instructions=instructions2, model=settings.WRITER_AGENT_MODEL)
     sales_agent3 = Agent(name="Busy_Sales_Agent", instructions=instructions3, model=settings.WRITER_AGENT_MODEL)
+    
+    description = """Write a complete cold sales email, including a subject line and a body."""
 
-    description = "Write the body and subject line for a cold sales email. This body is a template and MUST include placeholders like {{Position}}, {{Company}} and {{FirstName}} for mail merge.\
-            Address the email recipient using {{FirstName}} placeholder.\
-            Email must be signed-off by Mike, followed by his designation (think about appropriate creative title for a sales person), and finally followed by company name (SovereignAI).\
-            Include P.S at the end of body"
-    tool1 = sales_agent1.as_tool(tool_name="sales_agent1", tool_description=description)
-    tool2 = sales_agent2.as_tool(tool_name="sales_agent2", tool_description=description)
-    tool3 = sales_agent3.as_tool(tool_name="sales_agent3", tool_description=description)
+    tool1 = sales_agent1.as_tool(tool_name="Professional_Sales_Agent", tool_description=description)
+    tool2 = sales_agent2.as_tool(tool_name="Engaging_Sales_Agent", tool_description=description)
+    tool3 = sales_agent3.as_tool(tool_name="Busy_Sales_Agent", tool_description=description)
 
-    # 3. Define the Autonomous "Manager" Agent
-    sales_manager_instructions = """
-    You are the master orchestrator of a sales campaign. Your mission is to develop the best email content and then delegate the sending of that content.
-
-    **MANDATORY WORKFLOW:** You must follow these steps in order.
-
-    1.  **Generate Content:** Use all three of your content-generation tools (`Professional_Sales_Agent`, `Engaging_Sales_Agent`, `Busy_Sales_Agent`) to create three distinct email drafts.
-
-    2.  **Select & Finalize:** Review the three drafts. You pick the best cold sales email from the given options. Imagine you are a customer and pick the one you are most likely to respond to. \
-    Do not give an explanation; just finalize ONE email that you find the best among the presented options. Then, create a compelling subject line for this final draft.
-
-    3.  **Delegate via Handoff:** This is your final, required action. You MUST hand off the `subject` and the final email `body` to the `Campaign_Sender_Agent`.
-
-    **CRUCIAL RULE:** Your job is NOT complete until you have successfully initiated the handoff to the `Campaign_Sender_Agent`. You must handoff exactly ONE finalized email to the `Campaign_Sender_Agent`.
+    # --- START OF THE FIX: Create a new, specialized Selector Agent ---
+    selector_instructions = """
+    You are a decisive expert. You will be given a list of email drafts.
+    Your SOLE task is to choose the single best email from the options.
+    Imagine you are a customer and pick the one you are most likely to respond to.
+    You MUST respond with ONLY the full text of the winning email (including its subject and body).
+    Do not add any explanation, preamble, or formatting.
     """
+    email_selector_agent = Agent(
+        name="Email_Selector_Agent",
+        instructions=selector_instructions,
+        model=settings.MANAGER_AGENT_MODEL # Use a powerful model for decision making
+    )
+    selector_tool = email_selector_agent.as_tool(
+        tool_name="Email_Selector",
+        tool_description="Use this tool to select the single best email draft from a list of options."
+    )
+    # --- END OF THE FIX ---
 
+    # --- START OF THE FIX: Update the Sales Manager's instructions and tools ---
+    sales_manager_instructions = """
+    You are an expert orchestrator. Your purpose is to generate multiple email options, use a specialist to select the best one, and then delegate the sending of that single email.
 
+    **Your operational protocol is as follows:**
+
+    1.  **GENERATE DRAFTS:** Call all three of your content-generation tools (`Professional_Sales_Agent`, `Engaging_Sales_Agent`, `Busy_Sales_Agent`) to get three complete email options.
+
+    2.  **SELECT THE WINNER:** Combine all three drafts into a single text block. Then, you MUST use the `Email_Selector` tool to choose the single best email from the drafts.
+
+    3.  **PARSE THE WINNER:** From the selector tool's output, you must extract the `subject` and the `body_template` of the winning email.
+
+    4.  **EXECUTE HANDOFF:** You must hand off the extracted `subject` and `body_template` of the single winning email to the `Campaign_Sender_Agent`.
+
+    **SUCCESS CONDITION:** Your only successful output is the confirmation message from the `Campaign_Sender_Agent` after you have handed off the single, selected task.
+    """
     sales_manager = Agent(
         name="Sales_Manager",
         instructions=sales_manager_instructions,
-        tools=[tool1, tool2, tool3], # The manager only has content tools
-        handoffs=[campaign_sender_agent], # It can delegate to the sender agent
+        tools=[tool1, tool2, tool3, selector_tool], # Add the new selector tool
+        handoffs=[campaign_sender_agent],
         model=settings.MANAGER_AGENT_MODEL
     )
+    # --- END OF THE FIX ---
 
-    # 4. Run the autonomous workflow
-    # initial_prompt = "It's time to launch a new sales campaign. Please handle the entire process. The email should be from 'Alice' and mention the prospect's role '{{Position}}'."
     initial_prompt = """
     Start the sales campaign by orchestrating the entire process of drafting, finalizing and sending cold sales email.
     """
 
-    with trace("Autonomous_Sales_Campaign_with_Handoff"):
+    with trace("Autonomous_Sales_Campaign_with_Handoff_v3"):
         result = await Runner.run(sales_manager, initial_prompt)
     
     logger.info({
         "message": "Workflow Complete",
         "final_output": result.final_output
     })
-
 
 if __name__ == "__main__":
     asyncio.run(run_autonomous_sales_workflow())

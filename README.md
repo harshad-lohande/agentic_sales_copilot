@@ -12,6 +12,7 @@ An autonomous, multi-agent system designed to automate sales email outreach, int
   * **Approve & Send:** Immediately send the AI-drafted reply.  
   * **Edit & Send:** Open a pop-up modal to edit the draft before sending.  
   * **Discard:** Mark the reply as handled without taking further action.  
+* **Structured Logging:** All application events are logged in a structured JSON format for easy monitoring and debugging.  
 * **Secure & Configurable:** Manages all secret keys and configuration safely through environment variables.
 
 ## **Diagram: System Architecture**
@@ -53,10 +54,12 @@ graph TD
 * **Agent Framework:** agents (OpenAI Agents SDK)  
 * **Language:** Python 3.12+  
 * **Package Management:** Poetry  
-* **Web Framework:** FastAPI (for webhook server)  
-* **Email Service (Outbound & Inbound):** SendGrid  
-* **User Interface:** Slack SDK (for interactive notifications & modals)  
-* **Local Tunneling (Development):** ngrok
+* **Web Framework:** FastAPI  
+* **Task Queue:** Celery  
+* **Message Broker:** Redis  
+* **Email Service:** SendGrid  
+* **User Interface:** Slack SDK  
+* **Local Tunneling:** ngrok
 
 ## **⚙️ Setup and Installation**
 
@@ -108,34 +111,42 @@ Create a file named prospects.csv in the project root. It must contain headers t
 FirstName,LastName,Email,Company,Position  
 Jane,Doe,jane.doe@example.com,Example Corp,CTO
 
-## **▶️ Running the Application**
+## **▶️ Running the Application (Updated for Task Queue)**
 
-This application requires **three separate terminal processes** to run locally.
+This application is a distributed system and requires **four long-running services** for full functionality during local development. It's recommended to open four separate terminal windows.
 
-### **Terminal 1: Start the Webhook Server**
+### **Terminal 1: Start Redis**
 
-This server listens for inbound email replies from SendGrid and interactive actions from Slack.
+Redis acts as the message broker for background tasks. The easiest way to run it is with Docker.
+
+docker run \-d \-p 6379:6379 redis:alpine
+
+### **Terminal 2: Start the Celery Worker**
+
+This process listens for tasks from Redis and executes the long-running agent logic.
+
+poetry run celery \-A app.tasks worker \--loglevel=INFO
+
+### **Terminal 3: Start the Webhook Server**
+
+This server listens for inbound webhooks from SendGrid and Slack on your local machine.
 
 poetry run python webhook\_server.py
 
-### **Terminal 2: Start the ngrok Tunnel**
+### **Terminal 4: Start the ngrok Tunnel**
 
-This exposes your local webhook server to the internet.
+This exposes your local webhook server to the internet so SendGrid and Slack can reach it.
 
 \# Replace with your static domain if you have one  
 ngrok http 8000 \--domain \<your.static.domain.ngrok-free.app\>
 
-### **Terminal 3: Run the Outbound Campaign**
+### **Running an Outbound Campaign (On-Demand)**
 
-This script triggers the Sales\_Manager agent to start the email outreach campaign.
+Once the four services above are running, you can trigger a new email outreach campaign at any time by running the following command in a **new terminal**:
 
-poetry run python -m app.main
+poetry run python \-m app.main
 
 ## **🔮 Future Work & Roadmap**
 
-This project has a solid foundation. The next steps to elevate it to a fully production-grade system include:
-
-* **State Management & Memory:** Implement a database (e.g., SQLite or a cloud-based one) to store conversation history. This will allow the SDR\_Agent to have context for multi-turn conversations.  
-* **Asynchronous Task Queue:** Decouple the long-running agent processes from the web server using a task queue like Celery with Redis. This will make the API more resilient and prevent webhook timeouts.  
-* **Structured Logging:** Replace all print() statements with a structured JSON logger for better monitoring, debugging, and analysis in a production environment.  
-* **Containerization:** Dockerize the entire application for consistent, environment-agnostic deployment.
+* **State Management & Memory:** Implement a database (e.g., SQLite) to store conversation history, giving the SDR\_Agent context for multi-turn conversations.  
+* **Containerization:** Dockerize the entire application stack (web, worker, Redis) with docker-compose for consistent, one-command local setup and simplified deployment.
