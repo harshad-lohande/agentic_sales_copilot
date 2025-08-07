@@ -80,14 +80,14 @@ This project uses Poetry for dependency management. Ensure you have Poetry insta
 
 Create a file named .env in the root of the project directory. This file stores all your secret keys and configuration.
 
-# .env
+#### .env
 
-# --- API Keys ---  
+#### --- API Keys ---  
 OPENAI_API_KEY="sk-..."  
 SENDGRID_API_KEY="SG. ..."  
 SLACK_BOT_TOKEN="xoxb-..."
 
-# --- Configuration ---  
+#### --- Configuration ---  
 SLACK_CHANNEL_ID="C0..." # The ID of the Slack channel for notifications
 
 ### **4. Set Up External Services**
