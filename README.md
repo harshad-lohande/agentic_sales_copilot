@@ -67,8 +67,8 @@ Follow these steps to set up the project locally.
 
 ### **1\. Clone the Repository**
 
-`git clone \<your-repository-url\>  `
-`cd \<your-repository-name\>`
+- `git clone \<your-repository-url\>`
+- `cd \<your-repository-name\>`
 
 ### **2\. Install Dependencies**
 
