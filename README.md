@@ -67,14 +67,14 @@ Follow these steps to set up the project locally.
 
 ### **1\. Clone the Repository**
 
-git clone \<your-repository-url\>  
-cd \<your-repository-name\>
+`git clone \<your-repository-url\>  `
+`cd \<your-repository-name\>`
 
 ### **2\. Install Dependencies**
 
 This project uses Poetry for dependency management. Ensure you have Poetry installed, then run:
 
-poetry install
+`poetry install`
 
 ### **3\. Configure Environment Variables**
 
@@ -119,32 +119,32 @@ This application is a distributed system and requires **four long-running servic
 
 Redis acts as the message broker for background tasks. The easiest way to run it is with Docker.
 
-docker run \-d \-p 6379:6379 redis:alpine
+`docker run \-d \-p 6379:6379 redis:alpine`
 
 ### **Terminal 2: Start the Celery Worker**
 
 This process listens for tasks from Redis and executes the long-running agent logic.
 
-poetry run celery \-A app.tasks worker \--loglevel=INFO
+`poetry run celery \-A app.tasks worker \--loglevel=INFO`
 
 ### **Terminal 3: Start the Webhook Server**
 
 This server listens for inbound webhooks from SendGrid and Slack on your local machine.
 
-poetry run python webhook\_server.py
+`poetry run python webhook\_server.py`
 
 ### **Terminal 4: Start the ngrok Tunnel**
 
 This exposes your local webhook server to the internet so SendGrid and Slack can reach it.
 
 \# Replace with your static domain if you have one  
-ngrok http 8000 \--domain \<your.static.domain.ngrok-free.app\>
+`ngrok http 8000 \--domain \<your.static.domain.ngrok-free.app\>`
 
 ### **Running an Outbound Campaign (On-Demand)**
 
 Once the four services above are running, you can trigger a new email outreach campaign at any time by running the following command in a **new terminal**:
 
-poetry run python \-m app.main
+`poetry run python \-m app.main`
 
 ## **🔮 Future Work & Roadmap**
 
