@@ -1,11 +1,12 @@
 # webhook_server.py
 
-import uvicorn
+# import uvicorn
 import asyncio
 import json
 import aiohttp
-from fastapi import FastAPI, Form, Request, Response
-from app.logging_config import logger
+from fastapi import FastAPI, Request, Response
+from contextlib import asynccontextmanager
+from app.logging_config import logger, setup_logging
 
 from slack_sdk.web.async_client import AsyncWebClient
 from app.email_utils import send_single_email
@@ -15,6 +16,16 @@ from app.slack_notifier import send_slack_notification
 from app.config import settings
 from dotenv import load_dotenv
 load_dotenv(override=True)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Handles application startup and shutdown events.
+    """
+    # This code runs on startup
+    setup_logging()
+    print("Logging configured.")
+    yield
 
 app = FastAPI()
 
@@ -202,6 +213,6 @@ async def slack_action_handler(request: Request):
         return Response(status_code=500)
 
 
-if __name__ == "__main__":
-    # logging.config.fileConfig('logging.ini', disable_existing_loggers=False)
-    uvicorn.run("webhook_server:app", host="0.0.0.0", port=8000, reload=True)
+# if __name__ == "__main__":
+#     # logging.config.fileConfig('logging.ini', disable_existing_loggers=False)
+#     uvicorn.run("webhook_server:app", host="0.0.0.0", port=8000, reload=True)

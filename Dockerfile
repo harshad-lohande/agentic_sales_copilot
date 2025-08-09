@@ -11,7 +11,7 @@ WORKDIR /app
 
 # Install Poetry, Python's dependency manager.
 # We use a specific version for reproducibility and run it as a separate layer for better caching.
-RUN pip install poetry
+RUN pip install poetry==2.1.4
 
 # Copy only the files needed for dependency installation into the container.
 # This is a crucial optimization. Docker caches this layer, and it will only be re-run

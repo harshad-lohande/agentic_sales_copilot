@@ -3,7 +3,9 @@
 import json
 import asyncio
 from celery import Celery
-from .logging_config import logger
+from .logging_config import logger, setup_logging
+setup_logging()
+
 from .config import settings
 from .reply_agent import SDR_Agent
 from .slack_notifier import send_slack_notification

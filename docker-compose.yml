@@ -1,51 +1,35 @@
-# docker-compose.yml
-
-# Defines the individual services (containers) that make up your application.
 services:
-  # The Redis service, which acts as our message broker.
   redis:
-    # Use the official, lightweight Redis image from Docker Hub.
     image: redis:alpine
-    # Expose the Redis port to the host machine for potential debugging.
     ports:
       - "6379:6379"
 
-  # The FastAPI web server that receives webhooks.
   web:
-    # Build this service's image using the Dockerfile in the current directory ('.').
     build: .
-    # The command to run when this container starts.
-    # It starts the Uvicorn server, making it accessible from other containers.
-    command: poetry run python webhook_server.py
-    # command: poetry run uvicorn app.webhook_server:app --host 0.0.0.0 --port 8000 --log-config logging.ini
-    # Mount the current directory on the host to /app in the container.
-    # This allows you to change your code locally and have it instantly reflect
-    # inside the running container without rebuilding the image (for development).
+    # ADD a container_name
+    container_name: fastapi_webhook_server
+    command: poetry run gunicorn webhook_server:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 1 --log-config logging.ini
     volumes:
       - .:/app
-    # Expose the container's port 8000 to the host's port 8000.
     ports:
       - "8000:8000"
-    # Load environment variables from the .env file in the project root.
     env_file:
       - .env
-    # This service will not start until the 'redis' service is up and running.
+    environment:
+      - TZ=Asia/Kolkata
     depends_on:
       - redis
 
-  # The Celery worker that processes background tasks.
   worker:
-    # Build this service's image using the same Dockerfile.
     build: .
-    # The command to run when this container starts.
-    # It starts the Celery worker, which will connect to Redis.
+    # ADD a container_name
+    container_name: celery_worker
     command: poetry run celery -A app.tasks worker
-    # Also mount the current directory to sync code changes.
     volumes:
       - .:/app
-    # Also load the environment variables so it can access API keys.
     env_file:
       - .env
-    # This service also depends on Redis being available.
+    environment:
+      - TZ=Asia/Kolkata
     depends_on:
       - redis

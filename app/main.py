@@ -4,9 +4,10 @@ import asyncio
 import csv
 from dotenv import load_dotenv
 from .config import settings
-from .logging_config import logger
-import markdown2
+from .logging_config import logger, setup_logging
+setup_logging()
 
+import markdown2
 from agents import Agent, Runner, trace, function_tool
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, ReplyTo

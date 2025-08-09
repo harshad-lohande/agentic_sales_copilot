@@ -28,7 +28,8 @@ This diagram illustrates the complete, end-to-end workflow of the application, f
 * **Agent Framework:** agents (OpenAI Agents SDK)  
 * **Language:** Python 3.12+  
 * **Package Management:** Poetry  
-* **Web Framework:** FastAPI  
+* **Web Framework:** FastAPI
+* **Process Manager:** Gunicorn
 * **Task Queue:** Celery  
 * **Message Broker:** Redis  
 * **Email Service:** SendGrid  
