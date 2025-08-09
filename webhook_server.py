@@ -38,7 +38,7 @@ async def receive_inbound_email(request: Request):
     It expects the data to be in multipart/form-data format.
     """
     try:
-        # Resend sends data as a form. We parse it here.
+        # Resend sends data as a form. We parse it here
         form_data = await request.form()
         
         sender = form_data.get('from')
@@ -203,4 +203,5 @@ async def slack_action_handler(request: Request):
 
 
 if __name__ == "__main__":
+    # logging.config.fileConfig('logging.ini', disable_existing_loggers=False)
     uvicorn.run("webhook_server:app", host="0.0.0.0", port=8000, reload=True)
