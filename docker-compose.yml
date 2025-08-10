@@ -8,15 +8,17 @@ services:
     build: .
     # ADD a container_name
     container_name: fastapi_webhook_server
-    command: poetry run gunicorn webhook_server:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 1 --log-config logging.ini
+    command: gunicorn webhook_server:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 1 --log-config logging.ini
     volumes:
       - .:/app
+      - /app/.venv
     ports:
       - "8000:8000"
     env_file:
       - .env
     environment:
       - TZ=Asia/Kolkata
+      - PYTHONPATH=/app
     depends_on:
       - redis
 
@@ -24,12 +26,14 @@ services:
     build: .
     # ADD a container_name
     container_name: celery_worker
-    command: poetry run celery -A app.tasks worker
+    command: celery -A app.tasks worker
     volumes:
       - .:/app
+      - /app/.venv
     env_file:
       - .env
     environment:
       - TZ=Asia/Kolkata
+      - PYTHONPATH=/app
     depends_on:
       - redis

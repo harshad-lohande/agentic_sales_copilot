@@ -1,34 +1,49 @@
-# Stage 1: Use an official Python runtime as a parent image
-# We use the 'slim' version as it's smaller and more secure than the default.
+# Stage 1: The 'builder' stage
+# This stage will install poetry and all project dependencies.
+FROM python:3.12-slim as builder
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+# Set Poetry specific environment variables
+ENV POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_IN_PROJECT=true \
+    POETRY_VIRTUALENVS_CREATE=true
+
+WORKDIR /app
+
+# Install Poetry
+RUN pip install poetry==2.1.4
+
+# Copy only the dependency definition files
+COPY poetry.lock pyproject.toml ./
+
+# Install dependencies into a local .venv directory
+RUN poetry install --no-root --only main
+
+
+# Stage 2: The final production stage
+# This stage will be our final, lean image.
 FROM python:3.12-slim
 
-# Set environment variables to prevent Python from writing .pyc files to disk
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
-# Set the working directory inside the container
 WORKDIR /app
 
-# Install Poetry, Python's dependency manager.
-# We use a specific version for reproducibility and run it as a separate layer for better caching.
-RUN pip install poetry==2.1.4
+# Copy the virtual environment with all the dependencies from the 'builder' stage
+COPY --from=builder /app/.venv ./.venv
 
-# Copy only the files needed for dependency installation into the container.
-# This is a crucial optimization. Docker caches this layer, and it will only be re-run
-# if these specific files change, not every time you change your source code.
-COPY poetry.lock pyproject.toml ./
-
-# Install project dependencies using Poetry.
-# --no-root: Prevents Poetry from trying to install the project package itself, which doesn't exist yet.
-# --no-dev: Skips installing development dependencies like pytest, keeping the image smaller.
-# --without-hashes: A workaround for some potential poetry/docker issues, can be removed if not needed.
-RUN poetry install --no-root --only main
-
-# Copy the rest of your application's source code into the container.
-# This includes your 'app/' directory, 'webhook_server.py', etc.
+# Copy the rest of your application's source code
 COPY . .
 
-# The command that will be run when the container starts.
-# We will define the specific command to run (e.g., the web server or the worker)
-# in our docker-compose.yml file, so we don't need a default CMD here.
-# This makes the image more flexible.
+# The command to run the application will be specified in docker-compose.yml,
+# so no CMD is needed here, making the image more versatile.
+
+# Create the entrypoint script directly inside the Dockerfile
+RUN echo '#!/bin/sh' > /usr/local/bin/entrypoint.sh && \
+    echo 'export PATH="/app/.venv/bin:$PATH"' >> /usr/local/bin/entrypoint.sh && \
+    echo 'exec "$@"' >> /usr/local/bin/entrypoint.sh && \
+    chmod +x /usr/local/bin/entrypoint.sh
+
+# Set the entrypoint for the container
+ENTRYPOINT ["entrypoint.sh"]
