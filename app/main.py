@@ -107,7 +107,7 @@ async def run_autonomous_sales_workflow():
     tool2 = sales_agent2.as_tool(tool_name="Engaging_Sales_Agent", tool_description=description)
     tool3 = sales_agent3.as_tool(tool_name="Busy_Sales_Agent", tool_description=description)
 
-    # --- START OF THE FIX: Create a new, specialized Selector Agent ---
+    # Create a new, specialized Selector Agent
     selector_instructions = """
     You are a decisive expert. You will be given a list of email drafts.
     Your SOLE task is to choose the single best email from the options.
@@ -124,9 +124,8 @@ async def run_autonomous_sales_workflow():
         tool_name="Email_Selector",
         tool_description="Use this tool to select the single best email draft from a list of options."
     )
-    # --- END OF THE FIX ---
 
-    # --- START OF THE FIX: Update the Sales Manager's instructions and tools ---
+    # Update the Sales Manager's instructions and tools
     sales_manager_instructions = """
     You are an expert orchestrator. Your purpose is to generate multiple email options, use a specialist to select the best one, and then delegate the sending of that single email.
 
@@ -149,9 +148,10 @@ async def run_autonomous_sales_workflow():
         handoffs=[campaign_sender_agent],
         model=settings.MANAGER_AGENT_MODEL
     )
-    # --- END OF THE FIX ---
 
     initial_prompt = """
+    You are master orchestrator for running email campaign for SovereignAI. A company that sells agentic AI based solutions to bring autonomy and automation in business processes.
+    Target companies or businesses that are in tech industry and looking for AI automation to increase their productivity.
     Start the sales campaign by orchestrating the entire process of drafting, finalizing and sending cold sales email.
     """
 
@@ -159,8 +159,7 @@ async def run_autonomous_sales_workflow():
         result = await Runner.run(sales_manager, initial_prompt)
     
     logger.info({
-        "message": "Workflow Complete",
-        "final_output": result.final_output
+        "message": "Workflow Complete. Finalized cold sales email sent to prospects"
     })
 
 if __name__ == "__main__":
