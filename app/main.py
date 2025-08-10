@@ -72,7 +72,7 @@ async def run_autonomous_sales_workflow():
     logger.info({"message": "Starting autonomous sales workflow..."})
     
     sender_instructions = "You are a specialized agent responsible for executing email campaigns. You will receive the subject and body of an email, and your only job is to use the `send_personalized_bulk_email` tool to send it."
-    campaign_sender_agent = Agent(name="Campaign_Sender_Agent", instructions=sender_instructions, tools=[send_personalized_bulk_email], model=settings.CAMAPIGN_SENDER_MODEL, handoff_description="Use this agent to send the final, approved email campaign to the prospect list.")
+    campaign_sender_agent = Agent(name="Campaign_Sender_Agent", instructions=sender_instructions, tools=[send_personalized_bulk_email], model=settings.CAMPAIGN_SENDER_MODEL, handoff_description="Use this agent to send the final, approved email campaign to the prospect list.")
     
     instructions1 = f"""You are a professional, serious sales agent for SovereignAI.
             A company that sells agentic AI based solutions to bring autonomy and automation in business processes.
