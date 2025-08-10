@@ -9,12 +9,10 @@ from contextlib import asynccontextmanager
 from app.logging_config import logger, setup_logging
 
 from slack_sdk.web.async_client import AsyncWebClient
-from app.email_utils import send_single_email
-from app.reply_agent import SDR_Agent
-from agents import Runner, trace
-from app.slack_notifier import send_slack_notification
 from app.config import settings
 from dotenv import load_dotenv
+from app.tasks import process_inbound_email, send_approved_email
+
 load_dotenv(override=True)
 
 @asynccontextmanager
@@ -51,52 +49,25 @@ async def receive_inbound_email(request: Request):
     try:
         # Resend sends data as a form. We parse it here
         form_data = await request.form()
-        
         sender = form_data.get('from')
         subject = form_data.get('subject')
         body = form_data.get('text') # 'text' for plain text, 'html' for HTML
         
         logger.info({
-            "message": "Inbound email webhook received",
+            "message": "Inbound email webhook received, queueing for processing.",
             "sender": sender,
             "subject": subject
         })
 
         # We now trigger the SDR_Agent with the body of the reply.
         if body:
-            logger.info({"message": "Triggering SDR_Agent to process reply..."})
-            with trace("SDR_Agent_Reply_Processing"):
-                # The email body is the prompt for our agent
-                result = await Runner.run(SDR_Agent, body)
-
-            raw_output = result.final_output
-            logger.info({"message": "SDR_Agent analysis complete"})
-            # We pretty-print the JSON output from the agent
-            if raw_output.startswith("```json"):
-                cleaned_json_string = raw_output.strip("```json\n").strip("```")
-            else:
-                cleaned_json_string = raw_output
-            
-            try:
-                # Attempt to parse the cleaned string
-                analysis_json = json.loads(cleaned_json_string)
-                logger.info({
-                    "message": "Successfully parsed JSON from agent output",
-                    "classification": analysis_json.get("classification")
-                })
-                
-                # Send the successfully parsed analysis to Slack
-                await send_slack_notification(analysis_json, sender, subject)
-
-            except json.JSONDecodeError:
-                # This will catch errors if the string is still not valid JSON after cleaning
-                logger.error({
-                    "message": "Failed to parse JSON from agent output",
-                    "raw_output": raw_output
-                })
+            # Instead of processing here, we dispatch the task to Celery.
+            # The '.delay()' method sends the job to the Redis queue.
+            # The celery_worker will pick it up and run the task in the background.
+            process_inbound_email.delay(sender, subject, body)
         
         # We must return a 200 OK status to let Resend know we received it.
-        return {"status": "success", "message": "Email reply received and processed."}
+        return {"status": "success", "message": "Email reply successfully queued."}
 
     except Exception as e:
         logger.error({"message": "An error occurred in inbound email webhook", "error": str(e)})
@@ -128,9 +99,10 @@ async def slack_action_handler(request: Request):
                 log_context["prospect_email"] = prospect_email
 
                 if action_id == "approve_send":
-                    logger.info({**log_context, "message": "Approve & Send button clicked"})
-                    send_single_email(to_email=prospect_email, subject=reply_subject, body=draft_reply)   
-                    # NEW: Update the original message to show confirmation
+                    logger.info({**log_context, "message": "Approve & Send button clicked, queueing email.."})
+                    # Offload the approved email to the Celery worker
+                    send_approved_email.delay(to_email=prospect_email, subject=reply_subject, body=draft_reply)   
+                    # Update the original message to show confirmation
                     confirmation_blocks = payload["message"]["blocks"][:-1] # Get all blocks except the action block
                     confirmation_blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f":white_check_mark: Approved and sent by @{user_name}"}]})
                     await update_slack_message(response_url, confirmation_blocks)
@@ -138,7 +110,7 @@ async def slack_action_handler(request: Request):
                 elif action_id == "edit_send":
                     logger.info({**log_context, "message": "Edit & Send button clicked, opening modal"})
                     trigger_id = payload.get("trigger_id")
-                    # NEW: We must pass the response_url to the modal so we can use it on submission
+                    # We must pass the response_url to the modal so we can use it on submission
                     private_metadata = {
                         "prospect_email": prospect_email, 
                         "reply_subject": reply_subject,
@@ -164,26 +136,26 @@ async def slack_action_handler(request: Request):
 
             elif action_id == "discard":
                 logger.info({**log_context, "message": "Discard button clicked"})
-                # NEW: Update the original message to show it was discarded
+                # Update the original message to show it was discarded
                 confirmation_blocks = payload["message"]["blocks"][:-1] # Get all blocks except the action block
                 confirmation_blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f":wastebasket: Discarded by @{user_name}"}]})
                 await update_slack_message(response_url, confirmation_blocks)
         
         # --- Case 2: A user submitted the editing modal ---
         elif interaction_type == "view_submission":
-            # NEW: Extract the response_url from the metadata we passed
+            # Extract the response_url from the metadata we passed
             private_metadata = json.loads(payload["view"]["private_metadata"])
             prospect_email = private_metadata["prospect_email"]
             logger.info({
-                "message": "Edit modal submitted",
+                "message": "Edit modal submitted, queueing email..",
                 "user_name": user_name,
                 "prospect_email": prospect_email
             })
             response_url = private_metadata["response_url"]
             reply_subject = private_metadata["reply_subject"]           
             edited_text = payload["view"]["state"]["values"]["edited_reply_block"]["edited_reply_input"]["value"]
-            send_single_email(to_email=prospect_email, subject=reply_subject, body=edited_text)
-            
+            # Offload the edited email to the Celery worker
+            send_approved_email.delay(to_email=prospect_email, subject=reply_subject, body=edited_text)
             # Create a confirmation message that includes the edited, sent text
             confirmation_blocks = [
                 {
