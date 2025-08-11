@@ -121,6 +121,6 @@ Once the services are running via docker-compose up, you can trigger a new email
 
 * **docker-compose run --rm worker**: This command tells Docker to start a *new, temporary* container using the worker service's configuration, run a command inside it, and then remove the container (--rm) when it's done. This is the correct way to run one-off tasks.
 
-## **🔮 Future Work & Roadmap**
+## **🔮 Future Ideas**
 
-* **State Management & Memory:** Implement a database (e.g., SQLite) to store conversation history, giving the SDR_Agent context for multi-turn conversations.
+* **Enhanced Frontend**: Develop a web interface for campaign management, analytics, and viewing conversation histories.
