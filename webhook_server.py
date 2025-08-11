@@ -12,6 +12,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 from app.config import settings
 from dotenv import load_dotenv
 from app.tasks import process_inbound_email, send_approved_email
+from app.database import init_db
 
 load_dotenv(override=True)
 
@@ -23,6 +24,7 @@ async def lifespan(app: FastAPI):
     # This code runs on startup
     setup_logging()
     print("Logging configured.")
+    init_db()
     yield
 
 app = FastAPI()
