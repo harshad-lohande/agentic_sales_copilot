@@ -115,7 +115,7 @@ While the application is running inside Docker, it's still on your local machine
 
 Once the services are running via docker-compose up, you can trigger a new email outreach campaign at any time by running the following command in a **new, third terminal**:
 
-`docker compose run --rm worker poetry run python -m app.main`
+`docker compose run --rm worker python -m app.main`
 
 * **docker-compose run --rm worker**: This command tells Docker to start a *new, temporary* container using the worker service's configuration, run a command inside it, and then remove the container (--rm) when it's done. This is the correct way to run one-off tasks.
 
