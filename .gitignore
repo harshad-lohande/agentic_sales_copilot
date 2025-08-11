@@ -23,3 +23,6 @@ build/
 
 # Test directory
 tests/
+
+# Databases
+conversations.db
