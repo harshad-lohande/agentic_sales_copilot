@@ -1,18 +1,17 @@
-# app/tasks.py (Updated with Conversation History)
+# app/tasks.py
 
 import json
 import asyncio
 import re
 from celery import Celery
 from .logging_config import logger, setup_logging
-from .database import add_message_to_conversation, get_conversation_history
-from .database import init_db
+from .database import add_message_to_conversation, get_conversation_history, init_db
 
 setup_logging()
 init_db()
 
 from .config import settings
-from .reply_agent import SDR_Agent
+from .reply_agent import SDR_Agent, SdrAnalysis # Import the Pydantic model
 from .slack_notifier import send_slack_notification
 from .email_utils import send_single_email
 from agents import Runner, trace
@@ -20,65 +19,49 @@ from agents import Runner, trace
 # Configure Celery to use the Redis URL from our settings
 celery_app = Celery("tasks", broker=settings.CELERY_BROKER_URL)
 
-def parse_agent_json_output(raw_output: str) -> dict | None:
-    """
-    Cleans and parses a JSON string from an agent's raw output.
-    """
-    logger.debug(f"Raw agent output to parse: {raw_output}")
-    if raw_output.startswith("```json"):
-        cleaned_json_string = raw_output.strip("```json\n").strip("```")
-    else:
-        cleaned_json_string = raw_output
-
-    try:
-        analysis_json = json.loads(cleaned_json_string)
-        logger.info({
-            "message": "Successfully parsed JSON from agent output",
-            "classification": analysis_json.get("classification")
-        })
-        return analysis_json
-    except json.JSONDecodeError:
-        logger.error({
-            "message": "Failed to parse JSON from agent output",
-            "raw_output": raw_output
-        })
-        return None
-
 @celery_app.task
 def process_inbound_email(sender: str, subject: str, body: str):
     """
     Saves email to DB, gets full history, runs agent with context, and notifies Slack.
     """
     try:
-        # Extract the pure email address from the sender string (e.g., "John Doe <john@example.com>")
+        # Extract the pure email address from the sender string
         match = re.search(r'<(.+?)>', sender)
         prospect_email = match.group(1) if match else sender
 
-        # 1. Add the new incoming message to the conversation history
+        # 1. Add the new message to the conversation history
         add_message_to_conversation(prospect_email, "prospect", body)
         logger.info({"message": "Saved new message to conversation history", "prospect_email": prospect_email})
 
-        # 2. Get the full conversation history from the database
+        # 2. Get the full conversation history
         conversation_history_str = get_conversation_history(prospect_email)
         
         logger.info({"message": "Starting SDR_Agent task with full conversation history", "prospect_email": prospect_email})
         
-        # 3. Run the agent with the full history as the prompt for context
+        # 3. Run the agent. The result will now be an instance of SdrAnalysis.
         with trace("SDR_Agent_Reply_Processing_Task"):
             result = asyncio.run(Runner.run(SDR_Agent, conversation_history_str))
-        
-        raw_output = result.final_output
-        logger.info({"message": "SDR_Agent analysis complete", "prospect_email": prospect_email})
 
-        analysis_json = parse_agent_json_output(raw_output)
+        logger.info({"SDR agent response": result.final_output})
+
+        analysis_result: SdrAnalysis = result.final_output
+
+        logger.info({"analysis_result": analysis_result})
         
-        if analysis_json:
-            # 4. Also save the agent's suggested reply to the history for complete context
-            draft_reply = analysis_json.get("draft_reply", "")
+        logger.info({
+            "message": "SDR_Agent analysis complete",
+            "prospect_email": prospect_email,
+            "classification": analysis_result.classification
+        })
+
+        # The output is already a structured object, so no parsing is needed.
+        if analysis_result:
+            draft_reply = analysis_result.draft_reply
             if draft_reply:
                 add_message_to_conversation(prospect_email, "ai_agent_suggestion", draft_reply)
             
-            # 5. Send the interactive notification to Slack
+            # Convert the Pydantic model to a dictionary for the slack notifier
+            analysis_json = analysis_result.model_dump()
             asyncio.run(send_slack_notification(analysis_json, sender, subject))
 
     except Exception as e:
