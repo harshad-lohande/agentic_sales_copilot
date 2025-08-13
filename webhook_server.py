@@ -11,7 +11,7 @@ from app.logging_config import logger, setup_logging
 from slack_sdk.web.async_client import AsyncWebClient
 from app.config import settings
 from dotenv import load_dotenv
-from app.tasks import process_inbound_email, send_approved_email
+from app.tasks import process_inbound_email, send_approved_email, add_approved_reply_to_history
 from app.database import init_db
 
 load_dotenv(override=True)
@@ -102,8 +102,10 @@ async def slack_action_handler(request: Request):
 
                 if action_id == "approve_send":
                     logger.info({**log_context, "message": "Approve & Send button clicked, queueing email.."})
-                    # Offload the approved email to the Celery worker
-                    send_approved_email.delay(to_email=prospect_email, subject=reply_subject, body=draft_reply)   
+                    # Queue the approved email to the Celery worker
+                    send_approved_email.delay(to_email=prospect_email, subject=reply_subject, body=draft_reply)
+                    # Queue a task to save this approved reply to the database
+                    add_approved_reply_to_history.delay(prospect_email, reply_subject, draft_reply) 
                     # Update the original message to show confirmation
                     confirmation_blocks = payload["message"]["blocks"][:-1] # Get all blocks except the action block
                     confirmation_blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f":white_check_mark: Approved and sent by @{user_name}"}]})
@@ -156,8 +158,10 @@ async def slack_action_handler(request: Request):
             response_url = private_metadata["response_url"]
             reply_subject = private_metadata["reply_subject"]           
             edited_text = payload["view"]["state"]["values"]["edited_reply_block"]["edited_reply_input"]["value"]
-            # Offload the edited email to the Celery worker
+            # Queue the edited email to the Celery worker
             send_approved_email.delay(to_email=prospect_email, subject=reply_subject, body=edited_text)
+            # Queue a task to save this final, edited reply to the database
+            add_approved_reply_to_history.delay(prospect_email, reply_subject, edited_text)
             # Create a confirmation message that includes the edited, sent text
             confirmation_blocks = [
                 {
