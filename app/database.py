@@ -1,8 +1,9 @@
 # app/database.py
 
 import json
-from sqlalchemy import create_engine, Column, String, Text
+from sqlalchemy import create_engine, Column, String, Text, PrimaryKeyConstraint
 from sqlalchemy.orm import sessionmaker, declarative_base
+from .utils import normalize_subject
 
 DATABASE_URL = "sqlite:///./conversations.db"
 
@@ -13,7 +14,12 @@ Base = declarative_base()
 class Conversation(Base):
     __tablename__ = "conversations"
     prospect_email = Column(String, primary_key=True, index=True)
+    # Add subject to uniquely identify a conversation thread
+    subject = Column(String, primary_key=True, index=True)
     conversation_history = Column(Text, default="[]")
+
+    # Define a composite primary key
+    __table_args__ = (PrimaryKeyConstraint('prospect_email', 'subject'),)
 
 def init_db():
     Base.metadata.create_all(bind=engine)
@@ -25,28 +31,32 @@ def get_db():
     finally:
         db.close()
 
-def add_message_to_conversation(prospect_email: str, sender: str, message: str):
+def add_message_to_conversation(prospect_email: str, subject: str, sender: str, message: str):
     db = next(get_db())
-    conversation = db.query(Conversation).filter(Conversation.prospect_email == prospect_email).first()
+    normalized_subject = normalize_subject(subject)
+    # Query now uses both email and subject
+    conversation = db.query(Conversation).filter_by(prospect_email=prospect_email, subject=normalized_subject).first()
 
     if not conversation:
         # Be explicit on creation to ensure the field is never NULL
-        conversation = Conversation(prospect_email=prospect_email, conversation_history="[]")
+        conversation = Conversation(prospect_email=prospect_email, subject=normalized_subject, conversation_history="[]")
         db.add(conversation)
 
     # FIX: Handle the case where the history might be None or an empty string from the DB
     history_str = conversation.conversation_history
     history = json.loads(history_str) if history_str else []
-
     history.append({"sender": sender, "message": message})
     conversation.conversation_history = json.dumps(history, indent=2)
 
     db.commit()
     db.refresh(conversation)
 
-def get_conversation_history(prospect_email: str) -> str:
+def get_conversation_history(prospect_email: str, subject: str) -> str:
     db = next(get_db())
-    conversation = db.query(Conversation).filter(Conversation.prospect_email == prospect_email).first()
+    # Normalize the subject to ensure consistent querying
+    normalized_subject = normalize_subject(subject)
+    # Query now uses both email and subject
+    conversation = db.query(Conversation).filter_by(prospect_email=prospect_email, subject=normalized_subject).first()
     
     # FIX: Handle cases where conversation doesn't exist or its history is None/empty
     if conversation and conversation.conversation_history:

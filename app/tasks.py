@@ -6,6 +6,7 @@ import re
 from celery import Celery
 from .logging_config import logger, setup_logging
 from .database import add_message_to_conversation, get_conversation_history, init_db
+from .utils import normalize_subject
 
 setup_logging()
 init_db()
@@ -19,6 +20,22 @@ from agents import Runner, trace
 # Configure Celery to use the Redis URL from our settings
 celery_app = Celery("tasks", broker=settings.CELERY_BROKER_URL)
 
+# A dedicated task to save the final, approved reply to the database.
+@celery_app.task
+def add_approved_reply_to_history(prospect_email: str, subject: str, body: str):
+    """
+    Saves the final, human-approved or edited reply to the conversation history.
+    """
+    try:
+        logger.info({
+            "message": "Saving approved reply to conversation history",
+            "prospect_email": prospect_email
+        })
+        # The sender is the sales rep (or the system acting on their behalf)
+        add_message_to_conversation(prospect_email, subject, "sales_rep", body)
+    except Exception as e:
+        logger.error({"message": "Error saving approved reply to history", "error": str(e)})
+
 @celery_app.task
 def process_inbound_email(sender: str, subject: str, body: str):
     """
@@ -29,24 +46,34 @@ def process_inbound_email(sender: str, subject: str, body: str):
         match = re.search(r'<(.+?)>', sender)
         prospect_email = match.group(1) if match else sender
 
-        # 1. Add the new message to the conversation history
-        add_message_to_conversation(prospect_email, "prospect", body)
-        logger.info({"message": "Saved new message to conversation history", "prospect_email": prospect_email})
+        # Normalize the subject to identify the conversation thread
+        normalized_subject = normalize_subject(subject)
 
-        # 2. Get the full conversation history
-        conversation_history_str = get_conversation_history(prospect_email)
+        # 1. Add the new message to the conversation history
+        add_message_to_conversation(prospect_email, normalized_subject, "prospect", body)
+        logger.info({"message": "Saved new message to conversation history", 
+                     "prospect_email": prospect_email,
+                     "subject": normalized_subject,
+                })
+
+        # 2. Get the full conversation history for this specific prospect and subject
+        conversation_history_str = get_conversation_history(prospect_email, normalized_subject)
         
-        logger.info({"message": "Starting SDR_Agent task with full conversation history", "prospect_email": prospect_email})
+        # Determine the correct input for the agent
+        # If history is just the first message, use the body. Otherwise, use the full history.
+        history = json.loads(conversation_history_str)
+        if len(history) <= 1:
+            agent_input = body
+            logger.info({"message": "First reply in thread. Using email body as agent input.", "prospect_email": prospect_email})
+        else:
+            agent_input = conversation_history_str
+            logger.info({"message": "Continuing conversation. Using full history as agent input.", "prospect_email": prospect_email})
         
         # 3. Run the agent. The result will now be an instance of SdrAnalysis.
         with trace("SDR_Agent_Reply_Processing_Task"):
-            result = asyncio.run(Runner.run(SDR_Agent, conversation_history_str))
-
-        logger.info({"SDR agent response": result.final_output})
+            result = asyncio.run(Runner.run(SDR_Agent, agent_input))
 
         analysis_result: SdrAnalysis = result.final_output
-
-        logger.info({"analysis_result": analysis_result})
         
         logger.info({
             "message": "SDR_Agent analysis complete",
@@ -55,11 +82,7 @@ def process_inbound_email(sender: str, subject: str, body: str):
         })
 
         # The output is already a structured object, so no parsing is needed.
-        if analysis_result:
-            draft_reply = analysis_result.draft_reply
-            if draft_reply:
-                add_message_to_conversation(prospect_email, "ai_agent_suggestion", draft_reply)
-            
+        if analysis_result:          
             # Convert the Pydantic model to a dictionary for the slack notifier
             analysis_json = analysis_result.model_dump()
             asyncio.run(send_slack_notification(analysis_json, sender, subject))
