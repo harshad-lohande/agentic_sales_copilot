@@ -38,6 +38,9 @@ def send_personalized_bulk_email(subject: str, body_template: str):
                 personalized_subject = subject
 
                 for key, value in prospect.items():
+                    # This prevents errors if the CSV has trailing commas.
+                    if key is None:
+                        continue
                     placeholder_to_find = "{{" + key + "}}"
                     value_to_use = value if value is not None else ""
                     personalized_subject = personalized_subject.replace(placeholder_to_find, value_to_use)
