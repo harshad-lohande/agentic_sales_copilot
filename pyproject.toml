@@ -23,7 +23,8 @@ dependencies = [
     "redis (>=6.4.0,<7.0.0)",
     "markdown2 (>=2.5.4,<3.0.0)",
     "gunicorn (>=23.0.0,<24.0.0)",
-    "sqlalchemy (>=2.0.42,<3.0.0)"
+    "sqlalchemy (>=2.0.42,<3.0.0)",
+    "tavily-python (>=0.7.10,<0.8.0)"
 ]
 
 [tool.poetry]
