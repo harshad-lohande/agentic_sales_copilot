@@ -2,6 +2,8 @@
 
 An autonomous, multi-agent system designed to automate sales email outreach, intelligently process replies, and provide a human-in-the-loop interface for sales representatives via Slack. This version is fully containerized with Docker for consistent, one-command setup and deployment.
 
+---
+
 ## **🚀 Core Features (Current Version)**
 
 * **Autonomous Email Campaign Creation:** A Sales_Manager agent orchestrates a team of specialized agents to generate multiple email drafts, select the best one, and delegate the sending of personalized cold emails. 
@@ -20,10 +22,14 @@ An autonomous, multi-agent system designed to automate sales email outreach, int
 * **Structured Logging:** All application events are logged in a structured **JSON format** for easy monitoring and debugging. 
 * **Secure & Configurable:** Manages all secret keys and configuration safely through environment variables.
 
+---
+
 ## **Diagram: System Architecture**
 
 This diagram illustrates the complete, end-to-end workflow of the application, from outbound campaign to inbound reply processing.
 ![Agentic Sales Copilot: Architecture Diagram](./assets/Arch_Diag_Agentic_Sales_Copilot_v1.png)
+
+---
 
 ## **🛠️ Tech Stack & Key Libraries**
 
@@ -41,6 +47,8 @@ This diagram illustrates the complete, end-to-end workflow of the application, f
 * **User Interface:** Slack SDK  
 * **Local Tunneling (Development):** ngrok
 
+---
+
 ## **⚙️ Setup and Installation**
 
 Follow these steps to set up the project locally.
@@ -53,14 +61,18 @@ Follow these steps to set up the project locally.
 
 ### **1. Clone the Repository**
 
-- `git clone <your-repository-url>`
-- `cd <your-repository-name>`
+```
+git clone <your-repository-url>
+cd <your-repository-name>
+```
 
 ### **2. Install Dependencies**
 
 This project uses Poetry for dependency management. Ensure you have Poetry installed, then run:
 
-`poetry install`
+```
+poetry install
+```
 
 ### **3. Configure Environment Variables**
 
@@ -97,6 +109,8 @@ Create a file named prospects.csv in the project root. It must contain headers t
 FirstName,LastName,Email,Company,Position  
 Jane,Doe,jane.doe@example.com,Example Corp,CTO
 
+---
+
 ## **▶️ Running the Application (with Docker Compose)**
 
 Thanks to Docker Compose, the complex multi-terminal setup is now managed with a single command. However, you still need ngrok to expose your local services to the internet for development.
@@ -105,7 +119,9 @@ Thanks to Docker Compose, the complex multi-terminal setup is now managed with a
 
 This single command will build your application's Docker image and start the web server, the worker process, and the redis database, showing you all the logs in one place.
 
-`docker compose up --build`
+```
+docker compose up --build
+```
 
 *Use --build the first time or anytime you change the code to ensure the image is up-to-date.*
 
@@ -114,15 +130,21 @@ This single command will build your application's Docker image and start the web
 While the application is running inside Docker, it's still on your local machine. You need to expose the web server's port (8000) to the internet.
 
 # Replace with your static domain if you have one  
-`ngrok http 8000 --domain <your.static.domain.ngrok-free.app>`
+```
+ngrok http 8000 --domain <your.static.domain.ngrok-free.app>
+```
 
 ### **Running an Outbound Campaign (On-Demand)**
 
 Once the services are running via docker-compose up, you can trigger a new email outreach campaign at any time by running the following command in a **new, third terminal**:
 
-`docker compose run --rm worker python -m app.main`
+```
+docker compose run --rm worker python -m app.main
+```
 
 * **docker-compose run --rm worker**: This command tells Docker to start a *new, temporary* container using the worker service's configuration, run a command inside it, and then remove the container (--rm) when it's done. This is the correct way to run one-off tasks.
+
+---
 
 ## **🔮 Future Ideas**
 
