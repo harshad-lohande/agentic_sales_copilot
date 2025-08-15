@@ -1,7 +1,7 @@
 # app/database.py
 
 import json
-from sqlalchemy import create_engine, Column, String, Text, PrimaryKeyConstraint
+from sqlalchemy import create_engine, Column, String, Text, PrimaryKeyConstraint, Boolean
 from sqlalchemy.orm import sessionmaker, declarative_base
 from .utils import normalize_subject
 
@@ -17,6 +17,8 @@ class Conversation(Base):
     # Add subject to uniquely identify a conversation thread
     subject = Column(String, primary_key=True, index=True)
     conversation_history = Column(Text, default="[]")
+    # Flag to track if research has been performed for this thread.
+    research_performed = Column(Boolean, default=False, nullable=False)
 
     # Define a composite primary key
     __table_args__ = (PrimaryKeyConstraint('prospect_email', 'subject'),)
@@ -61,6 +63,20 @@ def get_conversation_history(prospect_email: str, subject: str) -> str:
     # FIX: Handle cases where conversation doesn't exist or its history is None/empty
     if conversation and conversation.conversation_history:
         # We can return the raw string here, as it's already a JSON string
-        return conversation.conversation_history
+        return conversation
         
     return "[]"
+
+def mark_research_performed(prospect_email: str, subject: str):
+    """Sets the research_performed flag to True for a conversation."""
+    db = next(get_db())
+    normalized_subject = normalize_subject(subject)
+    conversation = db.query(Conversation).filter_by(prospect_email=prospect_email, subject=normalized_subject).first()
+
+    if conversation:
+        conversation.research_performed = True
+        db.commit()
+        db.refresh(conversation)
+        return True
+    
+    return False
