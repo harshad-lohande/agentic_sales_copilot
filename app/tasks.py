@@ -5,7 +5,7 @@ import asyncio
 import re
 from celery import Celery
 from .logging_config import logger, setup_logging
-from .database import add_message_to_conversation, get_conversation_history, init_db
+from .database import add_message_to_conversation, get_conversation_history, init_db, mark_research_performed
 from .utils import normalize_subject, get_prospect_details_by_email
 
 setup_logging()
@@ -49,7 +49,14 @@ def process_inbound_email(sender: str, subject: str, body: str):
         
         # 1. Save new message and get history
         add_message_to_conversation(prospect_email, normalized_subject, "prospect", body)
-        conversation_history_str = get_conversation_history(prospect_email, normalized_subject)
+        conversation = get_conversation_history(prospect_email, normalized_subject)
+
+        # Handle case where conversation might not be found
+        if not conversation:
+            logger.error({"message": "Could not find or create conversation record", "prospect_email": prospect_email})
+            return
+        
+        conversation_history_str = conversation.conversation_history
         
         # --- Step 1: Run the original SDR_Agent ---
         with trace("Step1_Initial_SDR_Analysis"):
@@ -59,14 +66,15 @@ def process_inbound_email(sender: str, subject: str, body: str):
         logger.info({
             "message": "Initial analysis complete", 
             "prospect_email": prospect_email, 
-            "classification": initial_result.classification
+            "classification": initial_result.classification,
+            "research_performed": conversation.research_performed
         })
 
         final_draft_for_slack = initial_result.draft_reply
         
         # --- Step 2: Conditional Research & Personalized Writing ---
-        if initial_result.classification in ["POSITIVE_INTEREST", "QUESTION"]:
-            logger.info({"message": "Qualified lead. Looking up prospect details.", "prospect_email": prospect_email})
+        if initial_result.classification in ["POSITIVE_INTEREST", "QUESTION"] and not conversation.research_performed:
+            logger.info({"message": "Qualified lead and no prior research. Triggering research workflow.", "prospect_email": prospect_email})
             
             # Look up prospect details from the CSV
             prospect_details = get_prospect_details_by_email(prospect_email)
@@ -98,12 +106,14 @@ def process_inbound_email(sender: str, subject: str, body: str):
                     final_reply_output: FinalReply = writer_run_result.final_output
                 
                 final_draft_for_slack = final_reply_output.draft_reply
-                logger.info({"message": "Personalized draft created", "prospect_email": prospect_email})
+                # Mark research as performed so it doesn't run again for this thread.
+                mark_research_performed(prospect_email, normalized_subject)
+                logger.info({"message": "Personalized draft created and research flag set to True.", "prospect_email": prospect_email})
             else:
                 logger.warning({"message": "Could not find prospect in CSV. Skipping research and using standard draft.", "prospect_email": prospect_email})
 
         else:
-            logger.info({"message": "Lead not qualified. Using standard draft.", "prospect_email": prospect_email})
+            logger.info({"message": "Using standard draft (not a qualified lead or research already performed).", "prospect_email": prospect_email})
 
         # --- Final Step: Notify Slack ---
         final_analysis_for_slack = {
