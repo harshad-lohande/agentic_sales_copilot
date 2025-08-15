@@ -9,7 +9,9 @@ An autonomous, multi-agent system designed to automate sales email outreach, int
 * **Asynchronous Task Queue:** Utilizes **Celery** and **Redis** to offload long-running AI and email-sending tasks, ensuring the web server remains fast and responsive.
 * **Intelligent Reply Processing:** Automatically receives email replies via a SendGrid webhook. A dedicated SDR_Agent then analyzes the reply's content to classify its intent and summarize its key points.
 * **State Management & Memory:** Implements a SQLite database to store the complete conversation history with each prospect. This gives the SDR_Agent the context it needs to handle multi-turn conversations, understand previous interactions, and generate more relevant, context-aware replies.
-* **Interactive Human-in-the-Loop (HITL) Interface:** The agent's analysis is sent as an interactive notification to a Slack channel, allowing a human user to take action.  
+* **Interactive Human-in-the-Loop (HITL) Interface:** The agent's analysis is sent as an interactive notification to a Slack channel, allowing a human user to take action.
+* **Researcher Tool:** A specialized `Research_Agent` performs a comprehensive, multi-query web search to find recent, relevant information about the qualified lead.
+* **Hyper-Personalized Drafting:** A dedicated `Personalized_Writer_Agent` uses the conversation history and the new research to craft a high-impact reply.
 * **One-Click Actions:** From Slack, a user can:  
   * **Approve & Send:** Immediately send the AI-drafted reply.  
   * **Edit & Send:** Open a pop-up modal to edit the draft before sending.  
@@ -34,6 +36,7 @@ This diagram illustrates the complete, end-to-end workflow of the application, f
 * **Task Queue:** Celery  
 * **Message Broker:** Redis
 * **Database:** SQLite (with SQLAlchemy)
+* **Web Search:** Tavily AI (`tavily-python`)
 * **Email Service:** SendGrid  
 * **User Interface:** Slack SDK  
 * **Local Tunneling (Development):** ngrok
