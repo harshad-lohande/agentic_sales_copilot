@@ -129,7 +129,7 @@ docker compose up --build
 
 While the application is running inside Docker, it's still on your local machine. You need to expose the web server's port (8000) to the internet.
 
-# Replace with your static domain if you have one  
+### Replace with your static domain if you have one  
 ```
 ngrok http 8000 --domain <your.static.domain.ngrok-free.app>
 ```
