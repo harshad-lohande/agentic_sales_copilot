@@ -1,15 +1,30 @@
 # app/database.py
 
 import json
-from sqlalchemy import create_engine, Column, String, Text, PrimaryKeyConstraint, Boolean
+from sqlalchemy import (
+    create_engine,
+    Column,
+    String,
+    Text,
+    PrimaryKeyConstraint,
+    Boolean,
+)
 from sqlalchemy.orm import sessionmaker, declarative_base
 from .utils import normalize_subject
+from .config import settings
 
-DATABASE_URL = "sqlite:///./conversations.db"
+# Use environment variables to build the database URL
+DB_USER = settings.POSTGRES_USER
+DB_PASSWORD = settings.POSTGRES_PASSWORD
+DB_NAME = settings.POSTGRES_DB
+DB_HOST = "postgres"  # This is the service name from docker-compose.yml
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}"
+
+engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
 
 class Conversation(Base):
     __tablename__ = "conversations"
@@ -21,10 +36,13 @@ class Conversation(Base):
     research_performed = Column(Boolean, default=False, nullable=False)
 
     # Define a composite primary key
-    __table_args__ = (PrimaryKeyConstraint('prospect_email', 'subject'),)
+    __table_args__ = (PrimaryKeyConstraint("prospect_email", "subject"),)
+
 
 def init_db():
-    Base.metadata.create_all(bind=engine)
+    # Add checkfirst=True to prevent errors if the table already exists
+    Base.metadata.create_all(bind=engine, checkfirst=True)
+
 
 def get_db():
     db = SessionLocal()
@@ -33,15 +51,26 @@ def get_db():
     finally:
         db.close()
 
-def add_message_to_conversation(prospect_email: str, subject: str, sender: str, message: str):
+
+def add_message_to_conversation(
+    prospect_email: str, subject: str, sender: str, message: str
+):
     db = next(get_db())
     normalized_subject = normalize_subject(subject)
     # Query now uses both email and subject
-    conversation = db.query(Conversation).filter_by(prospect_email=prospect_email, subject=normalized_subject).first()
+    conversation = (
+        db.query(Conversation)
+        .filter_by(prospect_email=prospect_email, subject=normalized_subject)
+        .first()
+    )
 
     if not conversation:
         # Be explicit on creation to ensure the field is never NULL
-        conversation = Conversation(prospect_email=prospect_email, subject=normalized_subject, conversation_history="[]")
+        conversation = Conversation(
+            prospect_email=prospect_email,
+            subject=normalized_subject,
+            conversation_history="[]",
+        )
         db.add(conversation)
 
     # FIX: Handle the case where the history might be None or an empty string from the DB
@@ -53,30 +82,40 @@ def add_message_to_conversation(prospect_email: str, subject: str, sender: str, 
     db.commit()
     db.refresh(conversation)
 
+
 def get_conversation_history(prospect_email: str, subject: str) -> str:
     db = next(get_db())
     # Normalize the subject to ensure consistent querying
     normalized_subject = normalize_subject(subject)
     # Query now uses both email and subject
-    conversation = db.query(Conversation).filter_by(prospect_email=prospect_email, subject=normalized_subject).first()
-    
+    conversation = (
+        db.query(Conversation)
+        .filter_by(prospect_email=prospect_email, subject=normalized_subject)
+        .first()
+    )
+
     # FIX: Handle cases where conversation doesn't exist or its history is None/empty
     if conversation and conversation.conversation_history:
         # We can return the raw string here, as it's already a JSON string
         return conversation
-        
+
     return "[]"
+
 
 def mark_research_performed(prospect_email: str, subject: str):
     """Sets the research_performed flag to True for a conversation."""
     db = next(get_db())
     normalized_subject = normalize_subject(subject)
-    conversation = db.query(Conversation).filter_by(prospect_email=prospect_email, subject=normalized_subject).first()
+    conversation = (
+        db.query(Conversation)
+        .filter_by(prospect_email=prospect_email, subject=normalized_subject)
+        .first()
+    )
 
     if conversation:
         conversation.research_performed = True
         db.commit()
         db.refresh(conversation)
         return True
-    
+
     return False

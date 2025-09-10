@@ -1,20 +1,25 @@
 # webhook_server.py
 
-# import uvicorn
-import asyncio
 import json
 import aiohttp
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, status
 from contextlib import asynccontextmanager
+from slack_sdk.web.async_client import AsyncWebClient
+
+
+from app.config import settings
+
+# from dotenv import load_dotenv
+from app.tasks import (
+    process_inbound_email,
+    send_approved_email,
+    add_approved_reply_to_history,
+)
+from app.database import init_db
 from app.logging_config import logger, setup_logging
 
-from slack_sdk.web.async_client import AsyncWebClient
-from app.config import settings
-from dotenv import load_dotenv
-from app.tasks import process_inbound_email, send_approved_email, add_approved_reply_to_history
-from app.database import init_db
+# load_dotenv(override=True)
 
-load_dotenv(override=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,17 +32,30 @@ async def lifespan(app: FastAPI):
     init_db()
     yield
 
+
 app = FastAPI()
+
+
+@app.get("/health", status_code=status.HTTP_200_OK)
+async def health_check():
+    """
+    Simple health check endpoint.
+    """
+    return {"status": "ok"}
+
 
 # Initialize Slack client for use in action handlers
 slack_client = AsyncWebClient(token=settings.SLACK_BOT_TOKEN)
+
 
 # Helper function to update the Slack message
 async def update_slack_message(response_url: str, blocks: list):
     """Sends a POST request to the response_url to update the original message."""
     try:
         async with aiohttp.ClientSession() as session:
-            await session.post(response_url, json={"blocks": blocks, "replace_original": "true"})
+            await session.post(
+                response_url, json={"blocks": blocks, "replace_original": "true"}
+            )
     except Exception as e:
         logger.error({"message": "Error updating Slack message", "error": str(e)})
 
@@ -51,15 +69,17 @@ async def receive_inbound_email(request: Request):
     try:
         # Resend sends data as a form. We parse it here
         form_data = await request.form()
-        sender = form_data.get('from')
-        subject = form_data.get('subject')
-        body = form_data.get('text') # 'text' for plain text, 'html' for HTML
-        
-        logger.info({
-            "message": "Inbound email webhook received, queueing for processing.",
-            "sender": sender,
-            "subject": subject
-        })
+        sender = form_data.get("from")
+        subject = form_data.get("subject")
+        body = form_data.get("text")  # 'text' for plain text, 'html' for HTML
+
+        logger.info(
+            {
+                "message": "Inbound email webhook received, queueing for processing.",
+                "sender": sender,
+                "subject": subject,
+            }
+        )
 
         # We now trigger the SDR_Agent with the body of the reply.
         if body:
@@ -67,12 +87,14 @@ async def receive_inbound_email(request: Request):
             # The '.delay()' method sends the job to the Redis queue.
             # The celery_worker will pick it up and run the task in the background.
             process_inbound_email.delay(sender, subject, body)
-        
+
         # We must return a 200 OK status to let Resend know we received it.
         return {"status": "success", "message": "Email reply successfully queued."}
 
     except Exception as e:
-        logger.error({"message": "An error occurred in inbound email webhook", "error": str(e)})
+        logger.error(
+            {"message": "An error occurred in inbound email webhook", "error": str(e)}
+        )
         return {"status": "error", "message": str(e)}, 500
 
 
@@ -81,7 +103,7 @@ async def slack_action_handler(request: Request):
     try:
         form_data = await request.form()
         payload = json.loads(form_data.get("payload"))
-        
+
         interaction_type = payload.get("type")
         user_name = payload["user"]["name"]
 
@@ -101,89 +123,146 @@ async def slack_action_handler(request: Request):
                 log_context["prospect_email"] = prospect_email
 
                 if action_id == "approve_send":
-                    logger.info({**log_context, "message": "Approve & Send button clicked, queueing email.."})
+                    logger.info(
+                        {
+                            **log_context,
+                            "message": "Approve & Send button clicked, queueing email..",
+                        }
+                    )
                     # Queue the approved email to the Celery worker
-                    send_approved_email.delay(to_email=prospect_email, subject=reply_subject, body=draft_reply)
+                    send_approved_email.delay(
+                        to_email=prospect_email, subject=reply_subject, body=draft_reply
+                    )
                     # Queue a task to save this approved reply to the database
-                    add_approved_reply_to_history.delay(prospect_email, reply_subject, draft_reply) 
+                    add_approved_reply_to_history.delay(
+                        prospect_email, reply_subject, draft_reply
+                    )
                     # Update the original message to show confirmation
-                    confirmation_blocks = payload["message"]["blocks"][:-1] # Get all blocks except the action block
-                    confirmation_blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f":white_check_mark: Approved and sent by @{user_name}"}]})
+                    confirmation_blocks = payload["message"]["blocks"][
+                        :-1
+                    ]  # Get all blocks except the action block
+                    confirmation_blocks.append(
+                        {
+                            "type": "context",
+                            "elements": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": f":white_check_mark: Approved and sent by @{user_name}",
+                                }
+                            ],
+                        }
+                    )
                     await update_slack_message(response_url, confirmation_blocks)
 
                 elif action_id == "edit_send":
-                    logger.info({**log_context, "message": "Edit & Send button clicked, opening modal"})
+                    logger.info(
+                        {
+                            **log_context,
+                            "message": "Edit & Send button clicked, opening modal",
+                        }
+                    )
                     trigger_id = payload.get("trigger_id")
                     # We must pass the response_url to the modal so we can use it on submission
                     private_metadata = {
-                        "prospect_email": prospect_email, 
+                        "prospect_email": prospect_email,
                         "reply_subject": reply_subject,
-                        "response_url": response_url # Pass the URL through
+                        "response_url": response_url,  # Pass the URL through
                     }
-                    
+
                     await slack_client.views_open(
                         trigger_id=trigger_id,
                         view={
-                            "type": "modal", "callback_id": "submit_edited_email",
-                            "title": {"type": "plain_text", "text": "Edit & Send Reply"},
-                            "submit": {"type": "plain_text", "text": "Send"}, "close": {"type": "plain_text", "text": "Cancel"},
-                            "private_metadata": json.dumps(private_metadata), # Embed our enhanced metadata
+                            "type": "modal",
+                            "callback_id": "submit_edited_email",
+                            "title": {
+                                "type": "plain_text",
+                                "text": "Edit & Send Reply",
+                            },
+                            "submit": {"type": "plain_text", "text": "Send"},
+                            "close": {"type": "plain_text", "text": "Cancel"},
+                            "private_metadata": json.dumps(
+                                private_metadata
+                            ),  # Embed our enhanced metadata
                             "blocks": [
                                 {
-                                    "type": "input", "block_id": "edited_reply_block",
-                                    "element": {"type": "plain_text_input", "action_id": "edited_reply_input", "multiline": True, "initial_value": draft_reply},
-                                    "label": {"type": "plain_text", "text": "Email Body"}
+                                    "type": "input",
+                                    "block_id": "edited_reply_block",
+                                    "element": {
+                                        "type": "plain_text_input",
+                                        "action_id": "edited_reply_input",
+                                        "multiline": True,
+                                        "initial_value": draft_reply,
+                                    },
+                                    "label": {
+                                        "type": "plain_text",
+                                        "text": "Email Body",
+                                    },
                                 }
-                            ]
-                        }
+                            ],
+                        },
                     )
 
             elif action_id == "discard":
                 logger.info({**log_context, "message": "Discard button clicked"})
                 # Update the original message to show it was discarded
-                confirmation_blocks = payload["message"]["blocks"][:-1] # Get all blocks except the action block
-                confirmation_blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f":wastebasket: Discarded by @{user_name}"}]})
+                confirmation_blocks = payload["message"]["blocks"][
+                    :-1
+                ]  # Get all blocks except the action block
+                confirmation_blocks.append(
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": f":wastebasket: Discarded by @{user_name}",
+                            }
+                        ],
+                    }
+                )
                 await update_slack_message(response_url, confirmation_blocks)
-        
+
         # --- Case 2: A user submitted the editing modal ---
         elif interaction_type == "view_submission":
             # Extract the response_url from the metadata we passed
             private_metadata = json.loads(payload["view"]["private_metadata"])
             prospect_email = private_metadata["prospect_email"]
-            logger.info({
-                "message": "Edit modal submitted, queueing email..",
-                "user_name": user_name,
-                "prospect_email": prospect_email
-            })
+            logger.info(
+                {
+                    "message": "Edit modal submitted, queueing email..",
+                    "user_name": user_name,
+                    "prospect_email": prospect_email,
+                }
+            )
             response_url = private_metadata["response_url"]
-            reply_subject = private_metadata["reply_subject"]           
-            edited_text = payload["view"]["state"]["values"]["edited_reply_block"]["edited_reply_input"]["value"]
+            reply_subject = private_metadata["reply_subject"]
+            edited_text = payload["view"]["state"]["values"]["edited_reply_block"][
+                "edited_reply_input"
+            ]["value"]
             # Queue the edited email to the Celery worker
-            send_approved_email.delay(to_email=prospect_email, subject=reply_subject, body=edited_text)
+            send_approved_email.delay(
+                to_email=prospect_email, subject=reply_subject, body=edited_text
+            )
             # Queue a task to save this final, edited reply to the database
-            add_approved_reply_to_history.delay(prospect_email, reply_subject, edited_text)
+            add_approved_reply_to_history.delay(
+                prospect_email, reply_subject, edited_text
+            )
             # Create a confirmation message that includes the edited, sent text
             confirmation_blocks = [
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f":white_check_mark: *Edited reply sent to {prospect_email} by @{user_name}*"
-                    }
+                        "text": f":white_check_mark: *Edited reply sent to {prospect_email} by @{user_name}*",
+                    },
                 },
                 {
                     "type": "context",
-                    "elements": [
-                        {
-                            "type": "mrkdwn",
-                            "text": f"```{edited_text}```"
-                        }
-                    ]
-                }
+                    "elements": [{"type": "mrkdwn", "text": f"```{edited_text}```"}],
+                },
             ]
 
             await update_slack_message(response_url, confirmation_blocks)
-            
+
         return Response(status_code=200)
 
     except Exception as e:

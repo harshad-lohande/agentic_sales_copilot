@@ -6,6 +6,7 @@ from .config import settings
 from .logging_config import logger
 import markdown2
 
+
 def send_single_email(to_email: str, subject: str, body: str):
     """
     Sends a single email using SendGrid.
@@ -22,22 +23,26 @@ def send_single_email(to_email: str, subject: str, body: str):
             from_email=from_email_with_name,
             to_emails=to_email,
             subject=subject,
-            html_content=html_body
+            html_content=html_body,
         )
         message.reply_to = ReplyTo(reply_to_address)
-        
+
         response = sg.send(message)
-        logger.info({
-            "message": "Successfully sent single email",
-            "to_email": to_email,
-            "subject": subject,
-            "status_code": response.status_code
-        })
+        logger.info(
+            {
+                "message": "Successfully sent single email",
+                "to_email": to_email,
+                "subject": subject,
+                "status_code": response.status_code,
+            }
+        )
         return True
     except Exception as e:
-        logger.error({
-            "message": "Error sending single email",
-            "to_email": to_email,
-            "error": str(e)
-        })
+        logger.error(
+            {
+                "message": "Error sending single email",
+                "to_email": to_email,
+                "error": str(e),
+            }
+        )
         return False

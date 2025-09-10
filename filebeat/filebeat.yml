@@ -1,0 +1,20 @@
+# filebeat/filebeat.yml
+
+filebeat.autodiscover:
+  providers:
+    # Use Docker autodiscover provider
+    - type: docker
+      hints.enabled: true
+      # Only look for containers with the label 'logging: "true"'
+      hints.default_config:
+        type: container
+        paths:
+          - /var/lib/docker/containers/${data.docker.container.id}/*.log
+
+# Add Docker metadata to the event (container name, labels, etc.)
+processors:
+  - add_docker_metadata: ~
+
+# Output logs to Logstash
+output.logstash:
+  hosts: ["logstash:5044"]
