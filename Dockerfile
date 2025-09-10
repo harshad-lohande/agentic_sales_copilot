@@ -1,13 +1,12 @@
 # Stage 1: The 'builder' stage
 # This stage will install poetry and all project dependencies.
-FROM python:3.12-slim as builder
+FROM python:3.12-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
-# Set Poetry specific environment variables
+# Tell Poetry not to create a virtual environment, but install directly to system site-packages
 ENV POETRY_NO_INTERACTION=1 \
-    POETRY_VIRTUALENVS_IN_PROJECT=true \
-    POETRY_VIRTUALENVS_CREATE=true
+    POETRY_VIRTUALENVS_CREATE=false
 
 WORKDIR /app
 
@@ -17,33 +16,32 @@ RUN pip install poetry==2.1.4
 # Copy only the dependency definition files
 COPY poetry.lock pyproject.toml ./
 
-# Install dependencies into a local .venv directory
+# Install dependencies directly into the system path
 RUN poetry install --no-root --only main
 
 
 # Stage 2: The final production stage
-# This stage will be our final, lean image.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
+# Create a non-root user and group
+RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
+
 WORKDIR /app
 
-# Copy the virtual environment with all the dependencies from the 'builder' stage
-COPY --from=builder /app/.venv ./.venv
+# Copy installed packages from the builder stage to the final image's system path
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy the rest of your application's source code
+# Copy the application source code
 COPY . .
 
-# The command to run the application will be specified in docker-compose.yml,
-# so no CMD is needed here, making the image more versatile.
+# Change ownership of the app directory to the new user
+RUN chown -R appuser:appgroup /app
 
-# Create the entrypoint script directly inside the Dockerfile
-RUN echo '#!/bin/sh' > /usr/local/bin/entrypoint.sh && \
-    echo 'export PATH="/app/.venv/bin:$PATH"' >> /usr/local/bin/entrypoint.sh && \
-    echo 'exec "$@"' >> /usr/local/bin/entrypoint.sh && \
-    chmod +x /usr/local/bin/entrypoint.sh
+# Switch to the non-root user
+USER appuser
 
-# Set the entrypoint for the container
-ENTRYPOINT ["entrypoint.sh"]
+# No entrypoint is needed because the executables are now in the global PATH
