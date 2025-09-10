@@ -1,6 +1,66 @@
 services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=false # For development only
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.11.3
+    container_name: logstash
+    volumes:
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+    ports:
+      - "5044:5044"
+    depends_on:
+      - elasticsearch
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.3
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+
+  filebeat:
+    # Build the custom Dockerfile in the 'filebeat' directory
+    build:
+      context: ./filebeat
+    container_name: filebeat
+    user: root
+    volumes:
+      # We no longer need to mount the config file because it's now part of the image
+      # We also don't need the custom entrypoint script
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # REMOVE the entrypoint and command keys
+    depends_on:
+      - logstash
+
+  postgres:
+    image: postgres:17.6
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      TZ: Asia/Kolkata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    ports:
+      - "5432:5432"
+
   redis:
-    image: redis:alpine
+    image: redis:8.2.1
     ports:
       - "6379:6379"
     environment:
@@ -8,12 +68,10 @@ services:
 
   web:
     build: .
-    # ADD a container_name
     container_name: fastapi_webhook_server
     command: gunicorn webhook_server:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 1 --log-config logging.ini
     volumes:
       - .:/app
-      - /app/.venv
     ports:
       - "8000:8000"
     env_file:
@@ -23,15 +81,21 @@ services:
       - PYTHONPATH=/app
     depends_on:
       - redis
+      - postgres
+    labels:
+      - logging="true" # Label for Filebeat autodiscover
+    logging:
+      driver: "json-file" # Ensure logs are in a structured format
+      options:
+        max-size: "200k"
+        max-file: "10"
 
   worker:
     build: .
-    # ADD a container_name
     container_name: celery_worker
     command: celery -A app.tasks worker
     volumes:
       - .:/app
-      - /app/.venv
     env_file:
       - .env
     environment:
@@ -39,3 +103,15 @@ services:
       - PYTHONPATH=/app
     depends_on:
       - redis
+      - postgres
+    labels:
+      - logging="true" # Label for Filebeat autodiscover
+    logging:
+      driver: "json-file" # Ensure logs are in a structured format
+      options:
+        max-size: "200k"
+        max-file: "10"
+
+volumes:
+  postgres_data:
+  elasticsearch_data:
