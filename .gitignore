@@ -26,3 +26,7 @@ tests/
 
 # Databases
 conversations.db
+
+# Specific directories
+.pytest_cache
+.ruff_cache/
