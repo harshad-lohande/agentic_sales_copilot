@@ -2,6 +2,8 @@ services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
     container_name: elasticsearch
+    networks:
+      - elk-network
     environment:
       - discovery.type=single-node
       - ES_JAVA_OPTS=-Xms512m -Xmx512m
@@ -22,6 +24,8 @@ services:
   logstash:
     image: docker.elastic.co/logstash/logstash:8.11.3
     container_name: logstash
+    networks:
+      - elk-network
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -30,6 +34,10 @@ services:
       - "9600:9600"         # Logstash monitoring API
     volumes:
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+    environment:
+      - LS_JAVA_OPTS=-Xmx1g -Xms1g
+      - LOGSTASH_INTERNAL_PASSWORD=logstash_password
     healthcheck:
       # Use the monitoring API which returns JSON when Logstash is up
       test: ["CMD-SHELL", "curl -sf http://localhost:9600/_node/pipelines/main?pretty | grep -q '\"workers\"' || exit 1"]
@@ -42,6 +50,8 @@ services:
   kibana:
     image: docker.elastic.co/kibana/kibana:8.11.3
     container_name: kibana
+    networks:
+      - elk-network
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
     ports:
@@ -61,6 +71,8 @@ services:
     build:
       context: ./filebeat
     container_name: filebeat
+    networks:
+      - elk-network
     user: root
     # Filebeat will wait for Logstash to be healthy so we don’t lose early events
     depends_on:
@@ -184,3 +196,7 @@ services:
 volumes:
   postgres_data:
   elasticsearch_data:
+
+networks:
+  elk-network:
+    driver: bridge

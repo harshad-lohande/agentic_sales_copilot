@@ -1,0 +1,23 @@
+# logstash/logstash.yml
+http.host: "0.0.0.0"
+http.port: 9600
+path.data: /usr/share/logstash/data
+pipeline.workers: 4
+pipeline.batch.size: 125
+pipeline.batch.delay: 50
+pipeline.ecs_compatibility: v8
+
+# DNS retry configuration
+# Increase retry time for DNS resolution
+xpack.monitoring.enabled: false
+
+# Enable JVM options for better networking
+pipeline.unsafe_shutdown: false
+dead_letter_queue.enable: false
+
+# Better connection handling
+config.reload.automatic: false
+config.reload.interval: 3s
+
+# Disable X-Pack monitoring that requires ES connection during startup
+monitoring.enabled: false
