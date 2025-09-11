@@ -1,113 +1,73 @@
-# webhook_server.py
-
 import json
 import aiohttp
 from fastapi import FastAPI, Request, Response, status
 from contextlib import asynccontextmanager
 from slack_sdk.web.async_client import AsyncWebClient
 
-
 from app.config import settings
-
-# from dotenv import load_dotenv
 from app.tasks import (
     process_inbound_email,
     send_approved_email,
     add_approved_reply_to_history,
 )
 from app.database import init_db
-from app.logging_config import logger, setup_logging
-
-# load_dotenv(override=True)
-
+from app.logging_config import logger, setup_logging, set_correlation_id, get_correlation_id
+from app.middleware import CorrelationIdMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Handles application startup and shutdown events.
-    """
-    # This code runs on startup
     setup_logging()
-    print("Logging configured.")
     init_db()
     yield
 
-
-app = FastAPI()
-
+app = FastAPI(lifespan=lifespan)
+app.add_middleware(CorrelationIdMiddleware)
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
-    """
-    Simple health check endpoint.
-    """
     return {"status": "ok"}
 
-
-# Initialize Slack client for use in action handlers
 slack_client = AsyncWebClient(token=settings.SLACK_BOT_TOKEN)
 
-
-# Helper function to update the Slack message
 async def update_slack_message(response_url: str, blocks: list):
-    """Sends a POST request to the response_url to update the original message."""
     try:
         async with aiohttp.ClientSession() as session:
-            await session.post(
-                response_url, json={"blocks": blocks, "replace_original": "true"}
-            )
+            await session.post(response_url, json={"blocks": blocks, "replace_original": "true"})
     except Exception as e:
         logger.error({"message": "Error updating Slack message", "error": str(e)})
 
-
 @app.post("/webhook/inbound-email")
 async def receive_inbound_email(request: Request):
-    """
-    This endpoint will receive the inbound email data from Resend's webhook.
-    It expects the data to be in multipart/form-data format.
-    """
     try:
-        # Resend sends data as a form. We parse it here
+        cid = get_correlation_id()
         form_data = await request.form()
         sender = form_data.get("from")
         subject = form_data.get("subject")
-        body = form_data.get("text")  # 'text' for plain text, 'html' for HTML
+        body = form_data.get("text")
 
-        logger.info(
-            {
-                "message": "Inbound email webhook received, queueing for processing.",
-                "sender": sender,
-                "subject": subject,
-            }
-        )
+        logger.info({
+            "message": "Inbound email webhook received, queueing for processing.",
+            "sender": sender,
+            "subject": subject
+        })
 
-        # We now trigger the SDR_Agent with the body of the reply.
         if body:
-            # Instead of processing here, we dispatch the task to Celery.
-            # The '.delay()' method sends the job to the Redis queue.
-            # The celery_worker will pick it up and run the task in the background.
-            process_inbound_email.delay(sender, subject, body)
+            process_inbound_email.delay(sender, subject, body, correlation_id=cid)
 
-        # We must return a 200 OK status to let Resend know we received it.
         return {"status": "success", "message": "Email reply successfully queued."}
-
     except Exception as e:
-        logger.error(
-            {"message": "An error occurred in inbound email webhook", "error": str(e)}
-        )
+        logger.error({"message": "Inbound email webhook error", "error": str(e)})
         return {"status": "error", "message": str(e)}, 500
-
 
 @app.post("/slack/actions")
 async def slack_action_handler(request: Request):
     try:
+        cid = get_correlation_id()
         form_data = await request.form()
         payload = json.loads(form_data.get("payload"))
-
         interaction_type = payload.get("type")
         user_name = payload["user"]["name"]
 
-        # --- Case 1: A user clicked a button on the message ---
         if interaction_type == "block_actions":
             response_url = payload["response_url"]
             action = payload["actions"][0]
@@ -123,66 +83,41 @@ async def slack_action_handler(request: Request):
                 log_context["prospect_email"] = prospect_email
 
                 if action_id == "approve_send":
-                    logger.info(
-                        {
-                            **log_context,
-                            "message": "Approve & Send button clicked, queueing email..",
-                        }
-                    )
-                    # Queue the approved email to the Celery worker
+                    logger.info({**log_context, "message": "Approve & Send clicked"})
                     send_approved_email.delay(
-                        to_email=prospect_email, subject=reply_subject, body=draft_reply
+                        to_email=prospect_email,
+                        subject=reply_subject,
+                        body=draft_reply,
+                        correlation_id=cid
                     )
-                    # Queue a task to save this approved reply to the database
                     add_approved_reply_to_history.delay(
-                        prospect_email, reply_subject, draft_reply
+                        prospect_email, reply_subject, draft_reply, correlation_id=cid
                     )
-                    # Update the original message to show confirmation
-                    confirmation_blocks = payload["message"]["blocks"][
-                        :-1
-                    ]  # Get all blocks except the action block
-                    confirmation_blocks.append(
-                        {
-                            "type": "context",
-                            "elements": [
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f":white_check_mark: Approved and sent by @{user_name}",
-                                }
-                            ],
-                        }
-                    )
+                    confirmation_blocks = payload["message"]["blocks"][:-1]
+                    confirmation_blocks.append({
+                        "type": "context",
+                        "elements": [{"type": "mrkdwn", "text": f":white_check_mark: Approved and sent by @{user_name}"}],
+                    })
                     await update_slack_message(response_url, confirmation_blocks)
 
                 elif action_id == "edit_send":
-                    logger.info(
-                        {
-                            **log_context,
-                            "message": "Edit & Send button clicked, opening modal",
-                        }
-                    )
+                    logger.info({**log_context, "message": "Edit & Send clicked"})
                     trigger_id = payload.get("trigger_id")
-                    # We must pass the response_url to the modal so we can use it on submission
                     private_metadata = {
                         "prospect_email": prospect_email,
                         "reply_subject": reply_subject,
-                        "response_url": response_url,  # Pass the URL through
+                        "response_url": response_url,
+                        "correlation_id": cid
                     }
-
                     await slack_client.views_open(
                         trigger_id=trigger_id,
                         view={
                             "type": "modal",
                             "callback_id": "submit_edited_email",
-                            "title": {
-                                "type": "plain_text",
-                                "text": "Edit & Send Reply",
-                            },
+                            "title": {"type": "plain_text", "text": "Edit & Send Reply"},
                             "submit": {"type": "plain_text", "text": "Send"},
                             "close": {"type": "plain_text", "text": "Cancel"},
-                            "private_metadata": json.dumps(
-                                private_metadata
-                            ),  # Embed our enhanced metadata
+                            "private_metadata": json.dumps(private_metadata),
                             "blocks": [
                                 {
                                     "type": "input",
@@ -193,83 +128,56 @@ async def slack_action_handler(request: Request):
                                         "multiline": True,
                                         "initial_value": draft_reply,
                                     },
-                                    "label": {
-                                        "type": "plain_text",
-                                        "text": "Email Body",
-                                    },
+                                    "label": {"type": "plain_text", "text": "Email Body"},
                                 }
                             ],
                         },
                     )
 
             elif action_id == "discard":
-                logger.info({**log_context, "message": "Discard button clicked"})
-                # Update the original message to show it was discarded
-                confirmation_blocks = payload["message"]["blocks"][
-                    :-1
-                ]  # Get all blocks except the action block
-                confirmation_blocks.append(
-                    {
-                        "type": "context",
-                        "elements": [
-                            {
-                                "type": "mrkdwn",
-                                "text": f":wastebasket: Discarded by @{user_name}",
-                            }
-                        ],
-                    }
-                )
+                logger.info({**log_context, "message": "Discard clicked"})
+                confirmation_blocks = payload["message"]["blocks"][:-1]
+                confirmation_blocks.append({
+                    "type": "context",
+                    "elements": [{"type": "mrkdwn", "text": f":wastebasket: Discarded by @{user_name}"}],
+                })
                 await update_slack_message(response_url, confirmation_blocks)
 
-        # --- Case 2: A user submitted the editing modal ---
         elif interaction_type == "view_submission":
-            # Extract the response_url from the metadata we passed
             private_metadata = json.loads(payload["view"]["private_metadata"])
+            correlation_id = private_metadata.get("correlation_id")
+            if correlation_id:
+                set_correlation_id(correlation_id)
             prospect_email = private_metadata["prospect_email"]
-            logger.info(
-                {
-                    "message": "Edit modal submitted, queueing email..",
-                    "user_name": user_name,
-                    "prospect_email": prospect_email,
-                }
-            )
             response_url = private_metadata["response_url"]
             reply_subject = private_metadata["reply_subject"]
-            edited_text = payload["view"]["state"]["values"]["edited_reply_block"][
-                "edited_reply_input"
-            ]["value"]
-            # Queue the edited email to the Celery worker
+            edited_text = payload["view"]["state"]["values"]["edited_reply_block"]["edited_reply_input"]["value"]
+            logger.info({
+                "message": "Edit modal submitted",
+                "prospect_email": prospect_email
+            })
             send_approved_email.delay(
-                to_email=prospect_email, subject=reply_subject, body=edited_text
+                to_email=prospect_email,
+                subject=reply_subject,
+                body=edited_text,
+                correlation_id=correlation_id or cid
             )
-            # Queue a task to save this final, edited reply to the database
             add_approved_reply_to_history.delay(
-                prospect_email, reply_subject, edited_text
+                prospect_email, reply_subject, edited_text, correlation_id=correlation_id or cid
             )
-            # Create a confirmation message that includes the edited, sent text
             confirmation_blocks = [
                 {
                     "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f":white_check_mark: *Edited reply sent to {prospect_email} by @{user_name}*",
-                    },
+                    "text": {"type": "mrkdwn", "text": f":white_check_mark: *Edited reply sent to {prospect_email}*"},
                 },
                 {
                     "type": "context",
-                    "elements": [{"type": "mrkdwn", "text": f"```{edited_text}```"}],
+                    "elements": [{"type": "mrkdwn", "text": "```[REDACTED_CONTENT]```"}],
                 },
             ]
-
             await update_slack_message(response_url, confirmation_blocks)
-
         return Response(status_code=200)
 
     except Exception as e:
         logger.error({"message": "Error handling Slack action", "error": str(e)})
         return Response(status_code=500)
-
-
-# if __name__ == "__main__":
-#     # logging.config.fileConfig('logging.ini', disable_existing_loggers=False)
-#     uvicorn.run("webhook_server:app", host="0.0.0.0", port=8000, reload=True)

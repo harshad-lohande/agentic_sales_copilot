@@ -1,20 +1,49 @@
-# filebeat/filebeat.yml
-
 filebeat.autodiscover:
   providers:
-    # Use Docker autodiscover provider
     - type: docker
-      hints.enabled: true
-      # Only look for containers with the label 'logging: "true"'
-      hints.default_config:
-        type: container
-        paths:
-          - /var/lib/docker/containers/${data.docker.container.id}/*.log
+      labels.dedot: true
+      templates:
+        - condition.contains:
+            docker.container.labels.logging: "true"
+          config:
+            - type: docker
+              containers.ids:
+                - "${data.docker.container.id}"
+              processors:
+                - add_fields:
+                    target: ""
+                    fields:
+                      service.name: "agentic-sales-copilot"
+                      env: "${APP_ENV:dev}"
+                - decode_json_fields:
+                    fields: ["message"]
+                    target: "json"
+                    overwrite_keys: true
+                    add_error_key: true
+                - rename:
+                    fields:
+                      - from: "json.@timestamp"
+                        to: "@timestamp"
+                    ignore_missing: true
+                - copy_fields:
+                    fields:
+                      - from: "json.message"
+                        to: "message"
+                    fail_on_error: false
+                    ignore_missing: true
+                - add_docker_metadata: ~
+                - add_host_metadata: ~
+                - drop_fields:
+                    fields: ["json"]
+                    ignore_missing: true
 
-# Add Docker metadata to the event (container name, labels, etc.)
-processors:
-  - add_docker_metadata: ~
+queue.mem:
+  events: 4096
+  flush.min_events: 512
+  flush.timeout: 5s
 
-# Output logs to Logstash
 output.logstash:
   hosts: ["logstash:5044"]
+
+logging.level: info
+logging.to_files: false
