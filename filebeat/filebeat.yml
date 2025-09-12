@@ -2,19 +2,30 @@
 
 filebeat.autodiscover:
   providers:
-    # Use Docker autodiscover provider
     - type: docker
+      host: "unix:///var/run/docker.sock"
       hints.enabled: true
-      # Only look for containers with the label 'logging: "true"'
+      # Apply this config when co.elastic.logs/enabled="true" is present
+      # and no more specific hints are provided on the container.
       hints.default_config:
         type: container
         paths:
           - /var/lib/docker/containers/${data.docker.container.id}/*.log
+        stream: all
+        processors:
+          - add_docker_metadata: ~
+          - decode_json_fields:
+              fields: ["message"]
+              target: "app"
+              overwrite_keys: true
+              add_error_key: true
+        # Optional: drop empty lines early
+        exclude_lines: ["^\\s*$"]
 
-# Add Docker metadata to the event (container name, labels, etc.)
-processors:
-  - add_docker_metadata: ~
-
-# Output logs to Logstash
+# Send to Logstash
 output.logstash:
   hosts: ["logstash:5044"]
+
+# Helpful while validating (set back to warning later)
+logging.level: info
+# logging.selectors: ["autodiscover", "docker", "input", "harvester"]
