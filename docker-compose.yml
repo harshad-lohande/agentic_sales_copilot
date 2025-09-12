@@ -83,7 +83,7 @@ services:
       - redis
       - postgres
     labels:
-      - logging="true" # Label for Filebeat autodiscover
+      - co.elastic.logs/enabled="true" # Label for Filebeat autodiscover
     logging:
       driver: "json-file" # Ensure logs are in a structured format
       options:
@@ -105,7 +105,7 @@ services:
       - redis
       - postgres
     labels:
-      - logging="true" # Label for Filebeat autodiscover
+      - co.elastic.logs/enabled="true" # Label for Filebeat autodiscover
     logging:
       driver: "json-file" # Ensure logs are in a structured format
       options:
