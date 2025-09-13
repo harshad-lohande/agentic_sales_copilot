@@ -5,6 +5,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import Request
 from .logging_config import set_correlation_id, logger
 
+
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         incoming = request.headers.get("X-Correlation-ID")

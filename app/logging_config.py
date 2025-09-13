@@ -14,6 +14,7 @@ correlation_id_var = contextvars.ContextVar("correlation_id", default=None)
 SERVICE_NAME = getattr(settings, "SERVICE_NAME", "agentic-sales-copilot")
 APP_ENV = getattr(settings, "APP_ENV", "dev")
 
+
 class CorrelationFilter(logging.Filter):
     def filter(self, record):
         cid = correlation_id_var.get()
@@ -27,6 +28,7 @@ class CorrelationFilter(logging.Filter):
         record.utc_time = datetime.now(timezone.utc).isoformat()
         return True
 
+
 class ECSJsonFormatter(jsonlogger.JsonFormatter):
     def add_fields(self, log_record, record, message_dict):
         super().add_fields(log_record, record, message_dict)
@@ -35,13 +37,16 @@ class ECSJsonFormatter(jsonlogger.JsonFormatter):
             log_record["log.level"] = record.levelname
         if "service.name" not in log_record:
             log_record["service.name"] = getattr(record, "service_name", SERVICE_NAME)
-        if "correlation.id" not in log_record and getattr(record, "correlation_id", None):
+        if "correlation.id" not in log_record and getattr(
+            record, "correlation_id", None
+        ):
             log_record["correlation.id"] = record.correlation_id
         # Provide @timestamp aligned to UTC
         if "@timestamp" not in log_record:
             log_record["@timestamp"] = getattr(record, "utc_time")
         if "env" not in log_record:
             log_record["env"] = getattr(record, "env", APP_ENV)
+
 
 def setup_logging():
     if getattr(setup_logging, "_configured", False):
@@ -50,9 +55,7 @@ def setup_logging():
     logger.setLevel(logging.INFO)
 
     handler = logging.StreamHandler(sys.stdout)
-    formatter = ECSJsonFormatter(
-        "%(message)s %(filename)s %(funcName)s %(lineno)d"
-    )
+    formatter = ECSJsonFormatter("%(message)s %(filename)s %(funcName)s %(lineno)d")
     handler.setFormatter(formatter)
     handler.addFilter(CorrelationFilter())
     logger.handlers = [handler]
@@ -63,13 +66,16 @@ def setup_logging():
 
     setup_logging._configured = True
 
+
 logger = logging.getLogger("agentic_sales_copilot")
+
 
 def set_correlation_id(correlation_id: str | None):
     if not correlation_id:
         correlation_id = str(uuid.uuid4())
     correlation_id_var.set(correlation_id)
     return correlation_id
+
 
 def get_correlation_id():
     return correlation_id_var.get()
