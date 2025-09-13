@@ -10,24 +10,81 @@ An autonomous, multi-agent system designed to automate sales email outreach, int
 * **Personalized Bulk Emailing:** Sends personalized emails to a list of prospects from a .csv file, using placeholders for both the subject and body.
 * **Asynchronous Task Queue:** Utilizes **Celery** and **Redis** to offload long-running AI and email-sending tasks, ensuring the web server remains fast and responsive.
 * **Intelligent Reply Processing:** Automatically receives email replies via a SendGrid webhook. A dedicated SDR_Agent then analyzes the reply's content to classify its intent and summarize its key points.
-* **State Management & Memory:** Implements a SQLite database to store the complete conversation history with each prospect. This gives the SDR_Agent the context it needs to handle multi-turn conversations, understand previous interactions, and generate more relevant, context-aware replies.
+* **State Management & Memory:** Stores the complete conversation history with each prospect so the SDR_Agent can handle multi‑turn conversations and generate context‑aware replies.
 * **Interactive Human-in-the-Loop (HITL) Interface:** The agent's analysis is sent as an interactive notification to a Slack channel, allowing a human user to take action.
 * **Researcher Tool:** A specialized `Research_Agent` performs a comprehensive, multi-query web search to find recent, relevant information about the qualified lead.
 * **Hyper-Personalized Drafting:** A dedicated `Personalized_Writer_Agent` uses the conversation history and the new research to craft a high-impact reply.
 * **One-Click Actions:** From Slack, a user can:
-* **Approve & Send:** Immediately send the AI-drafted reply.
-* **Edit & Send:** Open a pop-up modal to edit the draft before sending.
-* **Discard:** Mark the reply as handled without taking further action.
-* **Containerized Environment:** The entire application stack (web server, background worker, Redis) is managed by **Docker and Docker Compose**, ensuring a consistent and reproducible environment.
-* **Structured Logging:** All application events are logged in a structured **JSON format** for easy monitoring and debugging. 
-* **Secure & Configurable:** Manages all secret keys and configuration safely through environment variables.
+    * **Approve & Send:** Immediately send the AI-drafted reply.
+    * **Edit & Send:** Open a pop-up modal to edit the draft before sending.
+    * **Discard:** Mark the reply as handled without taking further action.
+- **Containerized Environment:** Entire application stack (web, worker, Redis, PostgreSQL, and ELK) is managed by Docker Compose.
+- **Structured, Centralized Logging:** JSON logs from all containers are shipped to Elasticsearch via Filebeat and Logstash, and visualized in Kibana.
+
+---
+
+## 🆕 Enhancements
+
+### 1) Migrate Database to PostgreSQL
+Replaced the file‑based SQLite database with a production‑ready PostgreSQL server to support concurrent connections, larger datasets, and reliable operations.
+
+- Why PostgreSQL?
+  - ACID‑compliant, battle‑tested RDBMS
+  - Better concurrency and performance under load
+  - Easier scaling, backups, and observability
+- What changed?
+  - Docker Compose brings up a `postgres` container.
+  - The application connects via environment variables (see Setup).
+  - No local DB files; data persists in the `postgres_data` volume.
+
+Environment variables (in .env):
+```
+POSTGRES_USER=your_user
+POSTGRES_PASSWORD=your_password
+POSTGRES_DB=your_db
+```
+
+Service (Docker Compose excerpt):
+```
+postgres:
+  image: postgres:17.6
+  ports: ["5432:5432"]
+  environment:
+    - POSTGRES_USER=${POSTGRES_USER}
+    - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    - POSTGRES_DB=${POSTGRES_DB}
+  volumes:
+    - postgres_data:/var/lib/postgresql/data/
+```
+
+### 2) Observability and Monitoring (ELK Stack)
+We implemented centralized logging with the Elastic Stack (Elasticsearch, Logstash, Kibana), with Filebeat collecting container logs and forwarding them to Logstash for parsing and enrichment.
+
+- Flow:
+  1. App containers write JSON logs to stdout (Docker JSON log driver).
+  2. Filebeat tails Docker container log files and filters containers labeled `logging: "true"`.
+  3. Logstash parses, enriches, redacts sensitive content, and routes events.
+  4. Elasticsearch stores logs in daily indices:
+     - Errors: `agentic-sales-copilot-error-YYYY.MM.DD`
+     - Non‑errors: `agentic-sales-copilot-YYYY.MM.DD`
+  5. Kibana is used for exploration, dashboards, and monitoring.
+
+- Routing logic:
+  - If `is_error == true`, Logstash writes to the daily error index.
+  - Otherwise, it writes to the main daily index.
+
+- Health checks:
+  - Docker Compose includes health checks for Elasticsearch, Logstash, Kibana, Postgres, Redis, Web, and Worker to improve startup reliability.
+
+Read the full guide with commands, file structure, and troubleshooting:  
+See the ELK Observability Guide: [docs/observability.md](docs/observability.md)
 
 ---
 
 ## **Diagram: System Architecture**
 
 This diagram illustrates the complete, end-to-end workflow of the application, from outbound campaign to inbound reply processing.
-![Agentic Sales Copilot: Architecture Diagram](./assets/Arch_Diag_Agentic_Sales_Copilot_v1.png)
+![Agentic Sales Copilot: Architecture Diagram](docs/assets/Arch_Diag_Agentic_Sales_Copilot_v1.png)
 
 ---
 
@@ -41,11 +98,12 @@ This diagram illustrates the complete, end-to-end workflow of the application, f
 * **Process Manager:** Gunicorn
 * **Task Queue:** Celery
 * **Message Broker:** Redis
-* **Database:** SQLite (with SQLAlchemy)
+* **Database:** PostgreSQL
 * **Web Search:** Tavily AI (`tavily-python`)
 * **Email Service:** SendGrid
 * **User Interface:** Slack SDK
 * **Local Tunneling (Development):** ngrok
+* **Observability:** Elasticsearch, Logstash, Kibana (ELK stack), Filebeat
 
 ---
 
@@ -55,8 +113,8 @@ Follow these steps to set up the project locally.
 
 ### **Prerequisites**
 
-* **Docker & Docker Compose:** You must have Docker installed on your system. Docker Desktop for Windows and Mac includes Docker Compose. [Install Docker](https://docs.docker.com/get-docker/).
-* **Git:** For cloning the repository.
+* **Docker & Docker Compose:** [Install Docker](https://docs.docker.com/get-docker/)
+* **Git:** For code version control
 * **Poetry:** For local dependency management if you wish to run outside of Docker.
 
 ### **1. Clone the Repository**
@@ -120,10 +178,10 @@ Thanks to Docker Compose, the complex multi-terminal setup is now managed with a
 This single command will build your application's Docker image and start the web server, the worker process, and the redis database, showing you all the logs in one place.
 
 ```
-docker compose up --build
+docker compose up -d
 ```
 
-*Use --build the first time or anytime you change the code to ensure the image is up-to-date.*
+*Use --build when project dependencies change
 
 ### **Terminal 2: Start the ngrok Tunnel**
 

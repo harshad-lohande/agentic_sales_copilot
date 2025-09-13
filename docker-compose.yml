@@ -1,75 +1,142 @@
 services:
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.3
     container_name: elasticsearch
+    networks:
+      - elk-network
     environment:
       - discovery.type=single-node
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-      - xpack.security.enabled=false # For development only
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=false        # Development only (no auth)
     ports:
       - "9200:9200"
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      # Wait until cluster is reachable and at least YELLOW
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
 
   logstash:
-    image: docker.elastic.co/logstash/logstash:8.11.3
+    image: docker.elastic.co/logstash/logstash:8.19.3
     container_name: logstash
+    networks:
+      - elk-network
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    ports:
+      - "5044:5044"         # Beats input
+      - "9600:9600"         # Logstash monitoring API
     volumes:
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
-    ports:
-      - "5044:5044"
-    depends_on:
-      - elasticsearch
+      - ./logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+    environment:
+      - LS_JAVA_OPTS=-Xmx1g -Xms1g
+      - LOGSTASH_INTERNAL_PASSWORD=logstash_password
+    healthcheck:
+      # Use the monitoring API which returns JSON when Logstash is up
+      test: ["CMD-SHELL", "curl -sf http://localhost:9600/_node/pipelines/main?pretty | grep -q '\"workers\"' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 25s
+    restart: unless-stopped
 
   kibana:
-    image: docker.elastic.co/kibana/kibana:8.11.3
+    image: docker.elastic.co/kibana/kibana:8.19.3
     container_name: kibana
-    ports:
-      - "5601:5601"
+    networks:
+      - elk-network
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
     depends_on:
-      - elasticsearch
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5601/api/status | grep -q '\"overall\":{\"level\":\"available\"' || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    restart: unless-stopped
 
   filebeat:
-    # Build the custom Dockerfile in the 'filebeat' directory
     build:
       context: ./filebeat
     container_name: filebeat
+    networks:
+      - elk-network
     user: root
-    volumes:
-      # We no longer need to mount the config file because it's now part of the image
-      # We also don't need the custom entrypoint script
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    # REMOVE the entrypoint and command keys
+    # Filebeat will wait for Logstash to be healthy so we don’t lose early events
     depends_on:
-      - logstash
+      logstash:
+        condition: service_healthy
+    # Docker socket so autodiscover can enumerate running containers
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Mount the Docker container logs directory from the host into the Filebeat container
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    environment:
+      - APP_ENV=dev
+    healthcheck:
+      # Simple process liveness + internal stats endpoint (Filebeat exposes / once started)
+      test: ["CMD-SHELL", "netstat -tn 2>/dev/null | grep -q ':5044' || exit 0; exit 0"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
 
   postgres:
     image: postgres:17.6
     container_name: postgres_db
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-      TZ: Asia/Kolkata
-    volumes:
-      - postgres_data:/var/lib/postgresql/data/
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - TZ=Asia/Kolkata
     ports:
       - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
 
   redis:
     image: redis:8.2.1
+    container_name: redis
     ports:
       - "6379:6379"
     environment:
       - TZ=Asia/Kolkata
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
 
   web:
     build: .
     container_name: fastapi_webhook_server
-    command: gunicorn webhook_server:app --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 1 --log-config logging.ini
+    command: >
+      gunicorn webhook_server:app
+      --worker-class uvicorn.workers.UvicornWorker
+      --bind 0.0.0.0:8000
+      --workers 1
     volumes:
       - .:/app
     ports:
@@ -79,16 +146,24 @@ services:
     environment:
       - TZ=Asia/Kolkata
       - PYTHONPATH=/app
+      - APP_ENV=dev
     depends_on:
-      - redis
-      - postgres
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      logstash:
+        condition: service_healthy
     labels:
-      - logging="true" # Label for Filebeat autodiscover
-    logging:
-      driver: "json-file" # Ensure logs are in a structured format
-      options:
-        max-size: "200k"
-        max-file: "10"
+      logging: "true"
+    # Rely on JSON stdout logs; no custom logging driver needed
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health | grep -q '\"ok\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
 
   worker:
     build: .
@@ -101,17 +176,29 @@ services:
     environment:
       - TZ=Asia/Kolkata
       - PYTHONPATH=/app
+      - APP_ENV=dev
     depends_on:
-      - redis
-      - postgres
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      logstash:
+        condition: service_healthy
     labels:
-      - logging="true" # Label for Filebeat autodiscover
-    logging:
-      driver: "json-file" # Ensure logs are in a structured format
-      options:
-        max-size: "200k"
-        max-file: "10"
+      logging: "true"
+    restart: unless-stopped
+    healthcheck:
+      # Basic liveness: process exists + can import tasks (lightweight)
+      test: ["CMD-SHELL", "ps -o comm= 1>/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
 
 volumes:
   postgres_data:
   elasticsearch_data:
+
+networks:
+  elk-network:
+    driver: bridge

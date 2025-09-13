@@ -1,20 +1,65 @@
-# filebeat/filebeat.yml
+# This is the corrected Filebeat configuration.
+# It exclusively uses autodiscover to find and configure inputs for containers,
+# which is the correct pattern for this use case.
 
 filebeat.autodiscover:
   providers:
-    # Use Docker autodiscover provider
+    # Use the Docker provider to detect container start/stop events.
     - type: docker
-      hints.enabled: true
-      # Only look for containers with the label 'logging: "true"'
-      hints.default_config:
-        type: container
-        paths:
-          - /var/lib/docker/containers/${data.docker.container.id}/*.log
+      labels.dedot: true
+      templates:
+        # This condition will activate the configuration below for any container
+        # that has the label 'logging: "true"'.
+        - condition.contains:
+            docker.container.labels.logging: "true"
+          config:
+            # This 'container' input type is designed to harvest logs from container log files.
+            - type: container
+              # Stream 'all' captures both stdout and stderr from the container.
+              stream: all
+              # The path uses a variable provided by the autodiscover provider
+              # to dynamically point to the correct log file for the discovered container.
+              paths:
+                - /var/lib/docker/containers/${data.docker.container.id}/*.log
+              # These processors will be applied to the logs from each discovered container.
+              processors:
+                - add_fields:
+                    target: ""
+                    fields:
+                      service.name: "agentic-sales-copilot"
+                      env: "${APP_ENV:dev}"
+                - decode_json_fields:
+                    fields: ["message"]
+                    target: "json"
+                    overwrite_keys: true
+                    add_error_key: true
+                - rename:
+                    fields:
+                      - from: "json.@timestamp"
+                        to: "@timestamp"
+                    ignore_missing: true
+                - copy_fields:
+                    fields:
+                      - from: "json.message"
+                        to: "message"
+                    fail_on_error: false
+                    ignore_missing: true
+                - add_docker_metadata: ~
+                - add_host_metadata: ~
+                - drop_fields:
+                    fields: ["json"]
+                    ignore_missing: true
 
-# Add Docker metadata to the event (container name, labels, etc.)
-processors:
-  - add_docker_metadata: ~
+# Memory queue settings for handling backpressure.
+queue.mem:
+  events: 4096
+  flush.min_events: 512
+  flush.timeout: 5s
 
-# Output logs to Logstash
+# Output configuration to send logs to Logstash.
 output.logstash:
   hosts: ["logstash:5044"]
+
+logging.level: info
+logging.to_files: false
+

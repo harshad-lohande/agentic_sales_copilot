@@ -1,14 +1,15 @@
-# app/tasks.py
-
-# Standard library imports
 import asyncio
 import re
 from celery import Celery
 from agents import Runner, trace
 
-# Local application imports
 from .config import settings
-from .logging_config import logger, setup_logging
+from .logging_config import (
+    logger,
+    setup_logging,
+    get_correlation_id,
+    set_correlation_id,
+)
 from .database import (
     add_message_to_conversation,
     get_conversation_history,
@@ -26,18 +27,27 @@ from .reply_agent import (
     ResearchOutput,
     FinalReply,
 )
+from .celery_instrumentation import ContextTask
 
-# Run setup functions AFTER all imports are complete
 setup_logging()
 init_db()
 
-# Configure Celery
 celery_app = Celery("tasks", broker=settings.CELERY_BROKER_URL)
+celery_app.Task = ContextTask
+
+
+def _ensure_correlation(correlation_id):
+    if correlation_id:
+        set_correlation_id(correlation_id)
+    else:
+        set_correlation_id(get_correlation_id())
 
 
 @celery_app.task
-def add_approved_reply_to_history(prospect_email: str, subject: str, body: str):
-    """Saves the final, human-approved reply to the conversation history."""
+def add_approved_reply_to_history(
+    prospect_email: str, subject: str, body: str, correlation_id=None
+):
+    _ensure_correlation(correlation_id)
     try:
         logger.info(
             {
@@ -51,23 +61,17 @@ def add_approved_reply_to_history(prospect_email: str, subject: str, body: str):
 
 
 @celery_app.task
-def process_inbound_email(sender: str, subject: str, body: str):
-    """
-    Handles inbound emails with a multi-step, specialized agent workflow.
-    """
+def process_inbound_email(sender: str, subject: str, body: str, correlation_id=None):
+    _ensure_correlation(correlation_id)
     try:
         match = re.search(r"<(.+?)>", sender)
         prospect_email = match.group(1) if match else sender
-
         normalized_subject = normalize_subject(subject)
 
-        # 1. Save new message and get history
         add_message_to_conversation(
             prospect_email, normalized_subject, "prospect", body
         )
         conversation = get_conversation_history(prospect_email, normalized_subject)
-
-        # Handle case where conversation might not be found
         if not conversation:
             logger.error(
                 {
@@ -79,7 +83,6 @@ def process_inbound_email(sender: str, subject: str, body: str):
 
         conversation_history_str = conversation.conversation_history
 
-        # --- Step 1: Run the original SDR_Agent ---
         with trace("Step1_Initial_SDR_Analysis"):
             run_result = asyncio.run(Runner.run(SDR_Agent, conversation_history_str))
             initial_result: SdrAnalysis = run_result.final_output
@@ -95,7 +98,6 @@ def process_inbound_email(sender: str, subject: str, body: str):
 
         final_draft_for_slack = initial_result.draft_reply
 
-        # --- Step 2: Conditional Research & Personalized Writing ---
         if (
             initial_result.classification in ["POSITIVE_INTEREST", "QUESTION"]
             and not conversation.research_performed
@@ -107,11 +109,8 @@ def process_inbound_email(sender: str, subject: str, body: str):
                 }
             )
 
-            # Look up prospect details from the CSV
             prospect_details = get_prospect_details_by_email(prospect_email)
-
             if prospect_details:
-                # Construct the research input from CSV data
                 research_input = (
                     f"FirstName: {prospect_details.get('FirstName', '')}, "
                     f"LastName: {prospect_details.get('LastName', '')}, "
@@ -125,7 +124,6 @@ def process_inbound_email(sender: str, subject: str, body: str):
                     }
                 )
 
-                # Step 2a: Research
                 with trace("Step2a_Lead_Research"):
                     research_run_result = asyncio.run(
                         Runner.run(Research_Agent, research_input)
@@ -139,7 +137,6 @@ def process_inbound_email(sender: str, subject: str, body: str):
                     }
                 )
 
-                # Step 2b: Write Personalized Reply
                 writer_input = (
                     f"Conversation History: {conversation_history_str}\n"
                     f"Research Summary: {research_output.research_summary}"
@@ -151,31 +148,28 @@ def process_inbound_email(sender: str, subject: str, body: str):
                     final_reply_output: FinalReply = writer_run_result.final_output
 
                 final_draft_for_slack = final_reply_output.draft_reply
-                # Mark research as performed so it doesn't run again for this thread.
                 mark_research_performed(prospect_email, normalized_subject)
                 logger.info(
                     {
-                        "message": "Personalized draft created and research flag set to True.",
+                        "message": "Personalized draft created and research flag set",
                         "prospect_email": prospect_email,
                     }
                 )
             else:
                 logger.warning(
                     {
-                        "message": "Could not find prospect in CSV. Skipping research and using standard draft.",
+                        "message": "Prospect not found in CSV. Skipping research.",
                         "prospect_email": prospect_email,
                     }
                 )
-
         else:
             logger.info(
                 {
-                    "message": "Using standard draft (not a qualified lead or research already performed).",
+                    "message": "Using standard draft (not qualified or already researched).",
                     "prospect_email": prospect_email,
                 }
             )
 
-        # --- Final Step: Notify Slack ---
         final_analysis_for_slack = {
             "classification": initial_result.classification,
             "summary": initial_result.summary,
@@ -194,7 +188,7 @@ def process_inbound_email(sender: str, subject: str, body: str):
 
 
 @celery_app.task
-def send_approved_email(to_email: str, subject: str, body: str):
-    """Background task to send the final approved/edited email."""
+def send_approved_email(to_email: str, subject: str, body: str, correlation_id=None):
+    _ensure_correlation(correlation_id)
     logger.info({"message": "Executing send_approved_email task", "to_email": to_email})
     send_single_email(to_email, subject, body)
