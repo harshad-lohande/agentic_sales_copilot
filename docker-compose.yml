@@ -1,6 +1,6 @@
 services:
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.3
     container_name: elasticsearch
     networks:
       - elk-network
@@ -22,7 +22,7 @@ services:
     restart: unless-stopped
 
   logstash:
-    image: docker.elastic.co/logstash/logstash:8.11.3
+    image: docker.elastic.co/logstash/logstash:8.19.3
     container_name: logstash
     networks:
       - elk-network
@@ -48,7 +48,7 @@ services:
     restart: unless-stopped
 
   kibana:
-    image: docker.elastic.co/kibana/kibana:8.11.3
+    image: docker.elastic.co/kibana/kibana:8.19.3
     container_name: kibana
     networks:
       - elk-network
@@ -81,6 +81,8 @@ services:
     # Docker socket so autodiscover can enumerate running containers
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Mount the Docker container logs directory from the host into the Filebeat container
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
     environment:
       - APP_ENV=dev
     healthcheck:

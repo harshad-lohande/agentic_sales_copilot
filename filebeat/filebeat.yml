@@ -1,14 +1,27 @@
+# This is the corrected Filebeat configuration.
+# It exclusively uses autodiscover to find and configure inputs for containers,
+# which is the correct pattern for this use case.
+
 filebeat.autodiscover:
   providers:
+    # Use the Docker provider to detect container start/stop events.
     - type: docker
       labels.dedot: true
       templates:
+        # This condition will activate the configuration below for any container
+        # that has the label 'logging: "true"'.
         - condition.contains:
             docker.container.labels.logging: "true"
           config:
-            - type: docker
-              containers.ids:
-                - "${data.docker.container.id}"
+            # This 'container' input type is designed to harvest logs from container log files.
+            - type: container
+              # Stream 'all' captures both stdout and stderr from the container.
+              stream: all
+              # The path uses a variable provided by the autodiscover provider
+              # to dynamically point to the correct log file for the discovered container.
+              paths:
+                - /var/lib/docker/containers/${data.docker.container.id}/*.log
+              # These processors will be applied to the logs from each discovered container.
               processors:
                 - add_fields:
                     target: ""
@@ -37,13 +50,16 @@ filebeat.autodiscover:
                     fields: ["json"]
                     ignore_missing: true
 
+# Memory queue settings for handling backpressure.
 queue.mem:
   events: 4096
   flush.min_events: 512
   flush.timeout: 5s
 
+# Output configuration to send logs to Logstash.
 output.logstash:
   hosts: ["logstash:5044"]
 
 logging.level: info
 logging.to_files: false
+
